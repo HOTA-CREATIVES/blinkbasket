@@ -1,6 +1,6 @@
-# BlinkBasket - Hyperlocal Quick Commerce Platform
+# J C Mart - Hyperlocal Quick Commerce Platform
 
-BlinkBasket is a production-grade, hyperlocal quick-commerce application built with Flutter and Firebase BaaS. It features real-time inventory adjustments and Cash on Delivery (COD) fulfillment pipelines divided across three user personas: Customers, Delivery Partners, and Store Admins.
+J C Mart is a production-grade, hyperlocal quick-commerce application built with Flutter and Firebase BaaS. It features real-time inventory adjustments and Cash on Delivery (COD) fulfillment pipelines divided across three user personas: Customers, Delivery Partners, and Store Admins.
 
 ---
 

@@ -7,5 +7,60 @@
         "supportEmail": "support@undefined.firebaseapp.com"
       }
     }
+  },
+  "firestore": {
+    "rules": "firestore.rules",
+    "indexes": "firestore.indexes.json"
+  },
+  "storage": {
+    "rules": "storage.rules"
+  },
+  "functions": [
+    {
+      "source": "functions",
+      "codebase": "default",
+      "runtime": "nodejs20",
+      "predeploy": [
+        "npm --prefix \"$RESOURCE_DIR\" run build"
+      ]
+    }
+  ],
+  "emulators": {
+    "auth": {
+      "port": 9099
+    },
+    "firestore": {
+      "port": 8090
+    },
+    "functions": {
+      "port": 5001
+    },
+    "ui": {
+      "enabled": true
+    },
+    "singleProjectMode": true
+  },
+  "flutter": {
+    "platforms": {
+      "android": {
+        "default": {
+          "projectId": "hypermart-ee8ef",
+          "appId": "1:855090552291:android:5007077f6da40d8c6a54d6",
+          "fileOutput": "android/app/google-services.json"
+        }
+      },
+      "dart": {
+        "lib/firebase_options.dart": {
+          "projectId": "hypermart-ee8ef",
+          "configurations": {
+            "android": "1:855090552291:android:5007077f6da40d8c6a54d6",
+            "ios": "1:855090552291:ios:ff20fbb88c3ff0386a54d6",
+            "macos": "1:855090552291:ios:ff20fbb88c3ff0386a54d6",
+            "web": "1:855090552291:web:a4d79e2f35811e016a54d6",
+            "windows": "1:855090552291:web:318cc4dbb21b26506a54d6"
+          }
+        }
+      }
+    }
   }
 }
