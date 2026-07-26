@@ -5,5 +5,16 @@ class PlaceOrderUseCase {
   final OrderRepository repository;
   PlaceOrderUseCase(this.repository);
 
-  Future<bool> call(Order order) => repository.placeOrder(order);
+  Future<PlaceOrderResult> call({
+    required List<OrderItem> items,
+    required String deliveryAddress,
+    double? latitude,
+    double? longitude,
+  }) =>
+      repository.placeOrder(
+        items: items,
+        deliveryAddress: deliveryAddress,
+        latitude: latitude,
+        longitude: longitude,
+      );
 }

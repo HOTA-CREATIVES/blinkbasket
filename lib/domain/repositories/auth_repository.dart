@@ -7,17 +7,16 @@ abstract class AuthRepository {
   Future<AuthResult> signInWithEmail(String email, String password);
   Future<AuthResult> registerWithEmail(String email, String password);
   Future<AuthResult> signInWithGoogle();
-  Future<void> verifyPhoneNumber({
-    required String phoneNumber,
-    required Function(PhoneAuthCredential) verificationCompleted,
-    required Function(FirebaseAuthException) verificationFailed,
-    required Function(String, int?) codeSent,
-    required Function(String) codeAutoRetrievalTimeout,
-  });
-  Future<AuthResult> signInWithPhoneCredential(PhoneAuthCredential credential);
   Future<void> signOut();
-  Future<bool> authenticateBiometrically();
   Future<bool> setupCustomerProfile(UserModel userModel);
+  Future<bool> updateUserProfile(UserModel userModel);
+  /// Queries Firestore across all 3 collections (admin → delivery → customer)
+  /// and returns the first matching [UserModel] with its role field set.
+  /// Returns `null` when the Firebase Auth user has no Firestore doc yet
+  /// (i.e. a brand-new customer who needs profile setup).
+  Future<UserModel?> discoverUserRole(String uid, String email);
+  /// Fetches the profile for a *known* role — used by [reloadUserProfile] and
+  /// address-management flows after the role has already been established.
   Future<UserModel?> getUserProfile(String uid, String role);
   Future<void> saveDeliveryBoyUid(String docId, String uid);
 }

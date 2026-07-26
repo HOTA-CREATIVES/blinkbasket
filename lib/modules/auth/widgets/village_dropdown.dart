@@ -1,16 +1,11 @@
 import 'package:flutter/material.dart';
+import '../../../core/data/villages.dart';
 
 class VillageDropdown extends StatelessWidget {
   final String? value;
   final ValueChanged<String?> onChanged;
-  
-  static const List<String> villages = [
-    'Bhimavaram',
-    'Veeravasaram',
-    'Rayakuduru',
-    'Srungavruksham',
-    'Mentada',
-  ];
+
+  static List<String> get villages => Villages.names;
 
   const VillageDropdown({
     super.key,
@@ -38,7 +33,7 @@ class VillageDropdown extends StatelessWidget {
         child: DropdownButtonFormField<String>(
           value: value,
           hint: const Text(
-            'Select your Village / గ్రామం ఎంచుకోండి',
+            'Select your Village',
             style: TextStyle(color: Colors.grey, fontSize: 16),
           ),
           icon: const Icon(Icons.arrow_drop_down_circle_outlined, color: Colors.green),

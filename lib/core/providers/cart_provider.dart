@@ -16,6 +16,10 @@ class CartProvider with ChangeNotifier {
 
   Map<String, CartItem> get items => {..._items};
 
+  /// Direct single-product lookup — unlike [items], this doesn't clone the
+  /// whole cart map, so it's cheap to call from inside a list/grid itemBuilder.
+  int quantityOf(String productId) => _items[productId]?.quantity ?? 0;
+
   int get itemCount => _items.values.fold(0, (sum, item) => sum + item.quantity);
 
   double get totalAmount => _items.values.fold(0.0, (sum, item) => sum + (item.product.price * item.quantity));
@@ -25,6 +29,18 @@ class CartProvider with ChangeNotifier {
       _items[product.id]!.quantity += 1;
     } else {
       _items[product.id] = CartItem(product: product);
+    }
+    notifyListeners();
+  }
+
+  /// Adds [quantity] of [product] in one shot (e.g. reorder), rather than
+  /// incrementing by one like [addItem].
+  void addItemQuantity(Product product, int quantity) {
+    if (quantity <= 0) return;
+    if (_items.containsKey(product.id)) {
+      _items[product.id]!.quantity += quantity;
+    } else {
+      _items[product.id] = CartItem(product: product, quantity: quantity);
     }
     notifyListeners();
   }

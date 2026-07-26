@@ -45,14 +45,20 @@ class OrderDto extends Order {
     required super.customerPhone,
     required super.deliveryAddress,
     required super.village,
+    super.latitude,
+    super.longitude,
     required super.items,
     required super.totalAmount,
     required super.paymentMethod,
     required super.status,
     super.deliveryBoyId,
     super.deliveryBoyName,
+    super.deliveryBoyPhone,
     required super.createdAt,
     required super.updatedAt,
+    super.rating,
+    super.ratingComment,
+    super.notifyTier,
   });
 
   factory OrderDto.fromMap(Map<String, dynamic> map, String documentId) {
@@ -63,6 +69,8 @@ class OrderDto extends Order {
       customerPhone: map['customerPhone'] ?? '',
       deliveryAddress: map['deliveryAddress'] ?? '',
       village: map['village'] ?? '',
+      latitude: (map['latitude'] as num?)?.toDouble(),
+      longitude: (map['longitude'] as num?)?.toDouble(),
       items: (map['items'] as List<dynamic>?)
               ?.map((item) => OrderItemDto.fromMap(item as Map<String, dynamic>))
               .toList() ??
@@ -72,45 +80,12 @@ class OrderDto extends Order {
       status: map['status'] ?? 'pending',
       deliveryBoyId: map['deliveryBoyId'],
       deliveryBoyName: map['deliveryBoyName'],
+      deliveryBoyPhone: map['deliveryBoyPhone'],
       createdAt: (map['createdAt'] as Timestamp?)?.toDate() ?? DateTime.now(),
       updatedAt: (map['updatedAt'] as Timestamp?)?.toDate() ?? DateTime.now(),
-    );
-  }
-
-  Map<String, dynamic> toMap() {
-    return {
-      'customerId': customerId,
-      'customerName': customerName,
-      'customerPhone': customerPhone,
-      'deliveryAddress': deliveryAddress,
-      'village': village,
-      'items': items.map((item) => OrderItemDto.fromEntity(item).toMap()).toList(),
-      'totalAmount': totalAmount,
-      'paymentMethod': paymentMethod,
-      'status': status,
-      'deliveryBoyId': deliveryBoyId,
-      'deliveryBoyName': deliveryBoyName,
-      'createdAt': Timestamp.fromDate(createdAt),
-      'updatedAt': Timestamp.fromDate(updatedAt),
-    };
-  }
-
-  factory OrderDto.fromEntity(Order order) {
-    return OrderDto(
-      id: order.id,
-      customerId: order.customerId,
-      customerName: order.customerName,
-      customerPhone: order.customerPhone,
-      deliveryAddress: order.deliveryAddress,
-      village: order.village,
-      items: order.items,
-      totalAmount: order.totalAmount,
-      paymentMethod: order.paymentMethod,
-      status: order.status,
-      deliveryBoyId: order.deliveryBoyId,
-      deliveryBoyName: order.deliveryBoyName,
-      createdAt: order.createdAt,
-      updatedAt: order.updatedAt,
+      rating: map['rating'] as int?,
+      ratingComment: map['ratingComment'] as String?,
+      notifyTier: (map['notifyTier'] as num?)?.toInt(),
     );
   }
 }
