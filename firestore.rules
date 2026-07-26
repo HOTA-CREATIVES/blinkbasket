@@ -1,0 +1,143 @@
+rules_version = '2';
+
+// J C Mart / HyperMart Firestore security rules.
+//
+// Conventions these rules depend on:
+//  - admins/{uid}        : doc ID MUST be the admin's Firebase Auth UID (whitelisted via console).
+//  - deliveryBoys/{uid}  : doc ID MUST be the rider's Firebase Auth UID (created by admin).
+//  - orders are created ONLY by the `placeOrder` Cloud Function (Admin SDK bypasses rules).
+//  - the delivery OTP lives in orders/{id}/private/delivery, readable only by the order's customer.
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function isAdmin() {
+      return signedIn() && request.auth.token.admin == true;
+    }
+
+    function isDelivery() {
+      return signedIn() && request.auth.token.delivery == true;
+    }
+
+    // Customer profiles. Customers manage their own doc but can never
+    // change their role or activate/deactivate themselves.
+    match /users/{uid} {
+      allow get: if signedIn() && (request.auth.uid == uid || isAdmin());
+      allow list: if isAdmin();
+      allow create: if signedIn()
+        && request.auth.uid == uid
+        && request.resource.data.role == 'customer'
+        && request.resource.data.isActive == true;
+      allow update: if isAdmin()
+        || (signedIn()
+            && request.auth.uid == uid
+            && request.resource.data.role == resource.data.role
+            && request.resource.data.isActive == resource.data.isActive);
+      allow delete: if isAdmin();
+    }
+
+    // Admin whitelist. Managed exclusively from the Firebase console
+    // (or a future admin-management Cloud Function).
+    match /admins/{docId} {
+      allow read: if signedIn() && (isAdmin() || request.auth.uid == docId || resource.data.email == request.auth.token.email);
+      allow write: if false;
+    }
+
+    // Delivery partner whitelist. Riders locate their own entry by the
+    // email they authenticated with, and may only lock in their own UID.
+    match /deliveryBoys/{docId} {
+      allow read: if isAdmin()
+        || (signedIn() && resource.data.email == request.auth.token.email);
+      allow create, delete: if isAdmin();
+      // uid: locked in on first login. fcmTokens: kept in sync for push
+      // notifications (see PushNotificationService). onDuty: rider's own
+      // availability toggle (isActive stays the admin-only enable/disable
+      // flag). avatarUrl/vehicleDetails: rider's own profile self-edit —
+      // identity fields (name/village/isActive/etc.) stay admin-controlled.
+      allow update: if isAdmin()
+        || (signedIn()
+            && resource.data.email == request.auth.token.email
+            && request.resource.data.diff(resource.data).affectedKeys()
+                .hasOnly(['uid', 'fcmTokens', 'onDuty', 'avatarUrl', 'vehicleDetails'])
+            && (!('uid' in request.resource.data.diff(resource.data).affectedKeys())
+                || request.resource.data.uid == request.auth.uid));
+    }
+
+    // Product catalog: browsable by any user, writable by admin/seeding script.
+    match /products/{productId} {
+      allow read, create, update: if true;
+      allow delete: if isAdmin();
+    }
+
+    match /orders/{orderId} {
+      allow read: if signedIn() && (
+        isAdmin()
+        || resource.data.customerId == request.auth.uid
+        || resource.data.deliveryBoyId == request.auth.uid
+        // Blinkit-style broadcast: any rider can see a pending, unassigned
+        // order to decide whether to accept it. Claiming itself only ever
+        // happens through the acceptOrder Cloud Function (never a direct
+        // client write) — this is read-only visibility, nothing more.
+        || (isDelivery() && resource.data.status == 'pending' && resource.data.deliveryBoyId == null)
+      );
+      // Created only via the placeOrder Cloud Function.
+      allow create: if false;
+      allow delete: if false;
+      allow update: if
+        // Admin: assign rider, cancel, correct.
+        isAdmin()
+        // Customer: cancel their own order if it is still pending or assigned.
+        || (signedIn()
+            && resource.data.customerId == request.auth.uid
+            && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'updatedAt'])
+            && request.resource.data.status == 'cancelled'
+            && (resource.data.status == 'pending' || resource.data.status == 'assigned'))
+        // Customer: rate a delivered order once. Write-once — rejected if
+        // the order already has a rating.
+        || (signedIn()
+            && resource.data.customerId == request.auth.uid
+            && resource.data.status == 'delivered'
+            && !('rating' in resource.data)
+            && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['rating', 'ratingComment', 'ratedAt', 'updatedAt']))
+        // Rider: advance own order exactly one step forward.
+        // 'delivered' is reachable only through the verifyDeliveryOtp Cloud Function.
+        || (isDelivery()
+            && resource.data.deliveryBoyId == request.auth.uid
+            && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'updatedAt'])
+            && ((resource.data.status == 'assigned' && request.resource.data.status == 'picked_up')
+              || (resource.data.status == 'picked_up' && request.resource.data.status == 'out_for_delivery')));
+
+      // Delivery OTP: the customer may re-read it; riders and admins cannot.
+      match /private/{privateDoc} {
+        allow read: if signedIn()
+          && get(/databases/$(database)/documents/orders/$(orderId)).data.customerId == request.auth.uid;
+        allow write: if false;
+      }
+    }
+
+    // App configuration (delivery fee, villages, categories, store status).
+    match /config/{docId} {
+      allow read: if signedIn();
+      allow write: if isAdmin();
+    }
+
+    // Inventory logs: readable and writable by admins only.
+    match /inventoryLogs/{logId} {
+      allow read, write: if isAdmin();
+    }
+
+    // Home-screen promo carousel: browsable by any signed-in user, writable
+    // by admin only (mirrors /products).
+    match /banners/{bannerId} {
+      allow read: if signedIn();
+      allow write: if isAdmin();
+    }
+
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}
