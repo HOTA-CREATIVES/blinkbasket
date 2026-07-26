@@ -6,7 +6,7 @@ import { initializeApp } from "firebase-admin/app";
 import { getFirestore, FieldValue, Timestamp } from "firebase-admin/firestore";
 import { getAuth } from "firebase-admin/auth";
 import { getMessaging } from "firebase-admin/messaging";
-import { createHash } from "crypto";
+import { createHash, randomBytes } from "crypto";
 
 initializeApp();
 const db = getFirestore();
@@ -307,6 +307,12 @@ export const placeOrder = onCall({ region: REGION, enforceAppCheck: true }, asyn
         );
       }
       const price = Number(product.price ?? 0);
+      if (!Number.isFinite(price) || price <= 0) {
+        throw new HttpsError(
+          "failed-precondition",
+          `"${product.name}" is not currently available for purchase.`
+        );
+      }
       subtotal += price * item.quantity;
 
       const newReserved = reservedStock + item.quantity;
@@ -492,6 +498,39 @@ export const verifyDeliveryOtp = onCall({ region: REGION, enforceAppCheck: true 
 });
 
 /**
+ * Admin-only recovery path for an order stuck at verifyDeliveryOtp's
+ * MAX_OTP_ATTEMPTS cap: resets the attempt counter so the rider can retry
+ * (or the admin can walk the customer through re-reading the OTP).
+ */
+export const resetOtpAttempts = onCall({ region: REGION, enforceAppCheck: true }, async (request) => {
+  const uid = request.auth?.uid;
+  if (!uid) {
+    throw new HttpsError("unauthenticated", "Sign in first.");
+  }
+
+  const adminSnap = await db.collection("admins").doc(uid).get();
+  if (!adminSnap.exists || adminSnap.data()?.isActive === false) {
+    throw new HttpsError("permission-denied", "Only active admins can reset OTP attempts.");
+  }
+
+  const orderId = String(request.data?.orderId ?? "");
+  if (!orderId) {
+    throw new HttpsError("invalid-argument", "orderId is required.");
+  }
+
+  const privateRef = db.collection("orders").doc(orderId).collection("private").doc("delivery");
+  const privateSnap = await privateRef.get();
+  if (!privateSnap.exists) {
+    throw new HttpsError("not-found", "No delivery verification data for this order.");
+  }
+
+  await privateRef.update({ attempts: 0 });
+  console.log(`[OTP_ATTEMPTS_RESET] order ${orderId} reset by admin ${uid}`);
+
+  return { success: true };
+});
+
+/**
  * Blinkit-style order claim: any on-duty, active rider can accept a pending,
  * unassigned order — first to successfully commit the transaction wins.
  * Replaces the old admin manual-assign flow entirely; there is no other way
@@ -598,47 +637,59 @@ export const onOrderWritten = onDocumentWritten({ region: REGION, document: "ord
     const afterStatus = afterData.status;
 
     if (beforeStatus !== afterStatus) {
-      // If transition to cancelled: release reserved stock and log return
-      if (afterStatus === "cancelled" && beforeStatus !== "cancelled") {
+      // If transition to cancelled: release reserved stock and log return.
+      // Guarded by `stockReleased` so a redelivered/retried trigger event
+      // can never double-release the same reservation.
+      if (afterStatus === "cancelled" && beforeStatus !== "cancelled" && !afterData.stockReleased) {
         const itemsList = (afterData.items || []) as { productId: string; quantity: number }[];
         if (itemsList.length > 0) {
           const productRefs = itemsList.map(item => db.collection("products").doc(item.productId));
-          await db.runTransaction(async (tx) => {
-            const productSnaps = await tx.getAll(...productRefs);
-            for (let i = 0; i < itemsList.length; i++) {
-              const item = itemsList[i];
-              const prodSnap = productSnaps[i];
-              if (prodSnap.exists) {
-                const prod = prodSnap.data() as FirebaseFirestore.DocumentData;
-                const stockVal = Number(prod.stock ?? 0);
-                const phys = Number(prod.physicalStock ?? stockVal);
-                const res = Number(prod.reservedStock ?? 0);
+          try {
+            await db.runTransaction(async (tx) => {
+              const productSnaps = await tx.getAll(...productRefs);
+              for (let i = 0; i < itemsList.length; i++) {
+                const item = itemsList[i];
+                const prodSnap = productSnaps[i];
+                if (prodSnap.exists) {
+                  const prod = prodSnap.data() as FirebaseFirestore.DocumentData;
+                  const stockVal = Number(prod.stock ?? 0);
+                  const phys = Number(prod.physicalStock ?? stockVal);
+                  const res = Number(prod.reservedStock ?? 0);
 
-                const newRes = Math.max(0, res - item.quantity);
-                const newAvail = phys - newRes;
+                  const newRes = Math.max(0, res - item.quantity);
+                  const newAvail = phys - newRes;
 
-                tx.update(prodSnap.ref, {
-                  reservedStock: newRes,
-                  availableStock: newAvail,
-                  stock: newAvail,
-                  updatedAt: Timestamp.now()
-                });
+                  tx.update(prodSnap.ref, {
+                    reservedStock: newRes,
+                    availableStock: newAvail,
+                    stock: newAvail,
+                    updatedAt: Timestamp.now()
+                  });
 
-                // Write inventory log for the return (cancellation)
-                const ledgerRef = db.collection("inventoryLogs").doc();
-                tx.set(ledgerRef, {
-                  productId: item.productId,
-                  adminId: afterData.customerId || "system",
-                  orderId: event.params.orderId,
-                  changeType: "return",
-                  physicalDelta: 0,
-                  reservedDelta: -item.quantity,
-                  notes: `Order #${event.params.orderId} cancelled; reservation released.`,
-                  timestamp: Timestamp.now()
-                });
+                  // Write inventory log for the return (cancellation)
+                  const ledgerRef = db.collection("inventoryLogs").doc();
+                  tx.set(ledgerRef, {
+                    productId: item.productId,
+                    adminId: afterData.customerId || "system",
+                    orderId: event.params.orderId,
+                    changeType: "return",
+                    physicalDelta: 0,
+                    reservedDelta: -item.quantity,
+                    notes: `Order #${event.params.orderId} cancelled; reservation released.`,
+                    timestamp: Timestamp.now()
+                  });
+                }
               }
-            }
-          });
+              tx.set(event.data!.after.ref, { stockReleased: true }, { merge: true });
+            });
+          } catch (err) {
+            console.error(
+              `[STOCK_RELEASE_FAILED] order ${event.params.orderId} was cancelled but its reserved ` +
+              `stock could not be released — reservedStock is likely stranded and needs a manual ` +
+              `inventoryLogs correction.`,
+              err
+            );
+          }
         }
       }
 
@@ -839,16 +890,20 @@ export const createRiderLogin = onCall({ region: REGION, enforceAppCheck: true }
   }
 
   const email = String(request.data?.email ?? "").trim().toLowerCase();
-  const password = String(request.data?.password ?? "");
   const name = String(request.data?.name ?? "").trim();
   const phone = String(request.data?.phone ?? "").trim();
   const village = String(request.data?.village ?? "").trim();
   const vehicleNo = String(request.data?.vehicleNo ?? "").trim();
   const licenseNo = String(request.data?.licenseNo ?? "").trim();
 
-  if (!email || !password || password.length < 6 || !name || !phone || !village) {
+  if (!email || !name || !phone || !village) {
     throw new HttpsError("invalid-argument", "Missing or invalid required rider details.");
   }
+
+  // Generated server-side rather than accepted from the admin's client, so
+  // the credential transported to the rider is never chosen/known by a
+  // third party and always meets a real strength floor.
+  const password = randomBytes(9).toString("base64url");
 
   const auth = getAuth();
   let userRecord;
@@ -884,7 +939,7 @@ export const createRiderLogin = onCall({ region: REGION, enforceAppCheck: true }
   // Set custom claims (redundant but safe)
   await auth.setCustomUserClaims(riderUid, { role: "delivery", delivery: true });
 
-  return { success: true, uid: riderUid };
+  return { success: true, uid: riderUid, temporaryPassword: password };
 });
 
 /**

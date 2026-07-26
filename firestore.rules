@@ -66,9 +66,12 @@ service cloud.firestore {
                 || request.resource.data.uid == request.auth.uid));
     }
 
-    // Product catalog: browsable by any user, writable by admin/seeding script.
+    // Product catalog: browsable by any user, writable by admin only.
     match /products/{productId} {
-      allow read, create, update: if true;
+      allow read: if true;
+      allow create, update: if isAdmin()
+        && request.resource.data.price is number
+        && request.resource.data.price > 0.0;
       allow delete: if isAdmin();
     }
 

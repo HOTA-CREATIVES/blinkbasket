@@ -396,6 +396,59 @@ describe("firestore.rules — deliveryBoys onDuty / profile self-edit", () => {
   });
 });
 
+describe("firestore.rules — products", () => {
+  it("lets anyone, even unauthenticated, read the catalog", async () => {
+    await testEnv.withSecurityRulesDisabled(async (ctx) => {
+      await setDoc(doc(ctx.firestore(), "products/prod1"), { name: "Milk", price: 50 });
+    });
+
+    const { getDoc } = await import("firebase/firestore");
+    const asAnon = testEnv.unauthenticatedContext().firestore();
+    await assertSucceeds(getDoc(doc(asAnon, "products/prod1")));
+  });
+
+  it("blocks an unauthenticated client from creating a product", async () => {
+    const asAnon = testEnv.unauthenticatedContext().firestore();
+    await assertFails(
+      setDoc(doc(asAnon, "products/prod1"), { name: "Milk", price: 50 })
+    );
+  });
+
+  it("blocks a signed-in non-admin from creating or updating a product", async () => {
+    await testEnv.withSecurityRulesDisabled(async (ctx) => {
+      await setDoc(doc(ctx.firestore(), "products/prod1"), { name: "Milk", price: 50 });
+    });
+
+    const asCustomer = testEnv.authenticatedContext("cust1").firestore();
+    await assertFails(setDoc(doc(asCustomer, "products/prod2"), { name: "Bread", price: 30 }));
+    await assertFails(updateDoc(doc(asCustomer, "products/prod1"), { price: 1 }));
+  });
+
+  it("blocks an admin from setting a zero or negative price", async () => {
+    const asAdmin = testEnv.authenticatedContext("admin1", { admin: true }).firestore();
+    await assertFails(setDoc(doc(asAdmin, "products/prod1"), { name: "Milk", price: 0 }));
+    await assertFails(setDoc(doc(asAdmin, "products/prod2"), { name: "Milk", price: -5 }));
+  });
+
+  it("lets an admin create and update a product with a positive price", async () => {
+    const asAdmin = testEnv.authenticatedContext("admin1", { admin: true }).firestore();
+    await assertSucceeds(setDoc(doc(asAdmin, "products/prod1"), { name: "Milk", price: 50 }));
+    await assertSucceeds(updateDoc(doc(asAdmin, "products/prod1"), { price: 55 }));
+  });
+});
+
+describe("firestore.rules — config", () => {
+  it("blocks a non-admin from writing store config", async () => {
+    const asCustomer = testEnv.authenticatedContext("cust1").firestore();
+    await assertFails(setDoc(doc(asCustomer, "config/app"), { storeOpen: false }));
+  });
+
+  it("lets an admin write store config", async () => {
+    const asAdmin = testEnv.authenticatedContext("admin1", { admin: true }).firestore();
+    await assertSucceeds(setDoc(doc(asAdmin, "config/app"), { storeOpen: false }));
+  });
+});
+
 describe("firestore.rules — users self-update", () => {
   it("lets a customer update their own profile fields but not their role", async () => {
     await testEnv.withSecurityRulesDisabled(async (ctx) => {

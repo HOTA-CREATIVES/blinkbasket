@@ -136,6 +136,26 @@ describe("placeOrder", () => {
     ).rejects.toThrow(/Duplicate product/);
   });
 
+  it("rejects a product with a zero or missing price rather than charging nothing for it", async () => {
+    await seedUser("cust1");
+    await seedProduct("prod1", { price: 0 });
+    await seedConfig();
+
+    await expect(
+      placeOrder.run(
+        callableRequest(
+          {
+            items: [{ productId: "prod1", quantity: 1 }],
+            deliveryAddress: "Addr",
+            latitude: 16.5449,
+            longitude: 81.5212,
+          },
+          "cust1"
+        )
+      )
+    ).rejects.toThrow(/not currently available/);
+  });
+
   it("rejects when the store is closed", async () => {
     await seedUser("cust1");
     await seedProduct("prod1");
