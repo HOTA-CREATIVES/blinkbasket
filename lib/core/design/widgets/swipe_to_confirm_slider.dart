@@ -5,11 +5,17 @@ class SwipeToConfirmSlider extends StatefulWidget {
   final Color color;
   final VoidCallback onSwipeCompleted;
 
+  /// When false the slider ignores drags and looks dimmed. Callers turn it off
+  /// while the action it triggers is still running, so a second swipe can't
+  /// start a duplicate request.
+  final bool enabled;
+
   const SwipeToConfirmSlider({
     super.key,
     required this.text,
     required this.color,
     required this.onSwipeCompleted,
+    this.enabled = true,
   });
 
   @override
@@ -29,9 +35,10 @@ class _SwipeToConfirmSliderState extends State<SwipeToConfirmSlider>
       vsync: this,
       duration: const Duration(milliseconds: 300),
     );
-    _resetAnimation = Tween<double>(begin: 0.0, end: 0.0).animate(
-      CurvedAnimation(parent: _resetController, curve: Curves.easeOut),
-    );
+    _resetAnimation = Tween<double>(
+      begin: 0.0,
+      end: 0.0,
+    ).animate(CurvedAnimation(parent: _resetController, curve: Curves.easeOut));
   }
 
   @override
@@ -41,7 +48,7 @@ class _SwipeToConfirmSliderState extends State<SwipeToConfirmSlider>
   }
 
   void _onDragUpdate(DragUpdateDetails details, double maxDistance) {
-    if (_resetController.isAnimating) return;
+    if (!widget.enabled || _resetController.isAnimating) return;
     setState(() {
       _dragProgress += details.delta.dx / maxDistance;
       _dragProgress = _dragProgress.clamp(0.0, 1.0);
@@ -50,6 +57,10 @@ class _SwipeToConfirmSliderState extends State<SwipeToConfirmSlider>
 
   void _onDragEnd() {
     if (_resetController.isAnimating) return;
+    if (!widget.enabled) {
+      if (_dragProgress != 0) setState(() => _dragProgress = 0);
+      return;
+    }
     if (_dragProgress >= 0.9) {
       // Trigger callback
       widget.onSwipeCompleted();
@@ -70,10 +81,10 @@ class _SwipeToConfirmSliderState extends State<SwipeToConfirmSlider>
       _resetAnimation = Tween<double>(begin: _dragProgress, end: 0.0).animate(
         CurvedAnimation(parent: _resetController, curve: Curves.easeOut),
       )..addListener(() {
-          setState(() {
-            _dragProgress = _resetAnimation.value;
-          });
+        setState(() {
+          _dragProgress = _resetAnimation.value;
         });
+      });
       _resetController.forward(from: 0.0);
     }
   }
@@ -90,75 +101,92 @@ class _SwipeToConfirmSliderState extends State<SwipeToConfirmSlider>
         // setState fires on every drag delta (~60fps while dragging) — this
         // isolates that repaint to the slider itself, not whatever it sits
         // in (a bottomSheet, here).
-        return RepaintBoundary(
-          child: Container(
-          width: width,
-          height: height,
-          decoration: BoxDecoration(
-            color: widget.color.withValues(alpha: 0.15),
-            borderRadius: BorderRadius.circular(height / 2),
-            border: Border.all(color: widget.color.withValues(alpha: 0.3), width: 1.5),
-          ),
-          child: Stack(
-            alignment: Alignment.centerLeft,
-            children: [
-              // Center Label Text
-              Center(
-                child: ShaderMask(
-                  shaderCallback: (bounds) {
-                    return LinearGradient(
-                      colors: [
-                        widget.color.withValues(alpha: 0.6),
-                        widget.color,
-                        widget.color.withValues(alpha: 0.6),
-                      ],
-                      stops: const [0.0, 0.5, 1.0],
-                    ).createShader(bounds);
-                  },
-                  child: Text(
-                    widget.text,
-                    textAlign: TextAlign.center,
-                    style: const TextStyle(
-                      fontSize: 13,
-                      fontWeight: FontWeight.w800,
-                      color: Colors.white,
-                      letterSpacing: 1.2,
+        return Semantics(
+          button: true,
+          enabled: widget.enabled,
+          label: widget.text,
+          // A swipe is not possible with a screen reader, so expose the action
+          // as a plain activation.
+          onTap: widget.enabled ? widget.onSwipeCompleted : null,
+          child: ExcludeSemantics(
+            child: Opacity(
+              opacity: widget.enabled ? 1.0 : 0.5,
+              child: RepaintBoundary(
+                child: Container(
+                  width: width,
+                  height: height,
+                  decoration: BoxDecoration(
+                    color: widget.color.withValues(alpha: 0.15),
+                    borderRadius: BorderRadius.circular(height / 2),
+                    border: Border.all(
+                      color: widget.color.withValues(alpha: 0.3),
+                      width: 1.5,
                     ),
                   ),
-                ),
-              ),
-              // Draggable Thumb
-              Positioned(
-                left: 4.0 + (_dragProgress * maxDistance),
-                child: GestureDetector(
-                  onHorizontalDragUpdate: (details) =>
-                      _onDragUpdate(details, maxDistance),
-                  onHorizontalDragEnd: (_) => _onDragEnd(),
-                  child: Container(
-                    width: buttonSize,
-                    height: buttonSize,
-                    decoration: BoxDecoration(
-                      color: widget.color,
-                      shape: BoxShape.circle,
-                      boxShadow: [
-                        BoxShadow(
-                          color: widget.color.withValues(alpha: 0.4),
-                          blurRadius: 8,
-                          offset: const Offset(0, 4),
+                  child: Stack(
+                    alignment: Alignment.centerLeft,
+                    children: [
+                      // Center Label Text
+                      Center(
+                        child: ShaderMask(
+                          shaderCallback: (bounds) {
+                            return LinearGradient(
+                              colors: [
+                                widget.color.withValues(alpha: 0.6),
+                                widget.color,
+                                widget.color.withValues(alpha: 0.6),
+                              ],
+                              stops: const [0.0, 0.5, 1.0],
+                            ).createShader(bounds);
+                          },
+                          child: Text(
+                            widget.text,
+                            textAlign: TextAlign.center,
+                            style: const TextStyle(
+                              fontSize: 13,
+                              fontWeight: FontWeight.w800,
+                              color: Colors.white,
+                              letterSpacing: 1.2,
+                            ),
+                          ),
                         ),
-                      ],
-                    ),
-                    child: const Icon(
-                      Icons.double_arrow_rounded,
-                      color: Colors.white,
-                      size: 20,
-                    ),
+                      ),
+                      // Draggable Thumb
+                      Positioned(
+                        left: 4.0 + (_dragProgress * maxDistance),
+                        child: GestureDetector(
+                          onHorizontalDragUpdate:
+                              (details) => _onDragUpdate(details, maxDistance),
+                          onHorizontalDragEnd: (_) => _onDragEnd(),
+                          child: Container(
+                            width: buttonSize,
+                            height: buttonSize,
+                            decoration: BoxDecoration(
+                              color: widget.color,
+                              shape: BoxShape.circle,
+                              boxShadow: [
+                                BoxShadow(
+                                  color: widget.color.withValues(alpha: 0.4),
+                                  blurRadius: 8,
+                                  offset: const Offset(0, 4),
+                                ),
+                              ],
+                            ),
+                            child: const Icon(
+                              Icons.double_arrow_rounded,
+                              color: Colors.white,
+                              size: 20,
+                            ),
+                          ),
+                        ),
+                      ),
+                    ],
                   ),
                 ),
               ),
-            ],
+            ),
           ),
-        ));
+        );
       },
     );
   }

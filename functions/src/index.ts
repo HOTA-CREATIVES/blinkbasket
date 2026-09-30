@@ -903,6 +903,26 @@ export const verifyDeliveryOtp = onCall({ region: REGION, enforceAppCheck: proce
       throw new HttpsError("failed-precondition", "Order is not out for delivery.");
     }
 
+    // COD: the rider must confirm the exact amount collected. Checked before
+    // the OTP so a mistaken amount never burns one of the OTP attempts, and
+    // recorded below so a later dispute can be traced to a figure the rider
+    // confirmed rather than one the server assumed.
+    const rawCollected = request.data?.collectedAmount;
+    const collectedAmount = typeof rawCollected === "number" ? rawCollected : NaN;
+    if (!Number.isFinite(collectedAmount) || collectedAmount < 0) {
+      throw new HttpsError(
+        "invalid-argument",
+        "Confirm the cash you collected before completing the delivery."
+      );
+    }
+    const amountDue = Number(order.totalAmount ?? 0);
+    if (Math.round(collectedAmount * 100) !== Math.round(amountDue * 100)) {
+      throw new HttpsError(
+        "failed-precondition",
+        `Collect exactly ₹${amountDue} from the customer. If they can't pay, report the delivery as failed.`
+      );
+    }
+
     const privateRef = orderRef.collection("private").doc("delivery");
     const privateSnap = await tx.get(privateRef);
     if (!privateSnap.exists) {
@@ -993,7 +1013,7 @@ export const verifyDeliveryOtp = onCall({ region: REGION, enforceAppCheck: proce
       // entries above) — flag it so no later cancel can release it again.
       stockReleased: true,
       paymentStatus: "paid",
-      codCollectedAmount: Number(order.totalAmount ?? 0),
+      codCollectedAmount: collectedAmount,
       codCollectedBy: uid,
       codCollectedAt: deliveredNow,
       riderPayout,

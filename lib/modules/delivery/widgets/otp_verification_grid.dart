@@ -3,14 +3,21 @@ import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 import '../../../core/design/app_tokens.dart';
 import '../../../core/providers/order_provider.dart';
+import '../../../core/utils/money.dart';
 
 class OtpVerificationGrid extends StatefulWidget {
   final String orderId;
+
+  /// The order total the rider must collect in cash. The rider confirms
+  /// having taken exactly this before the code is submitted, and the server
+  /// records and checks it.
+  final double amountDue;
   final VoidCallback onSuccess;
 
   const OtpVerificationGrid({
     super.key,
     required this.orderId,
+    required this.amountDue,
     required this.onSuccess,
   });
 
@@ -22,7 +29,12 @@ class _OtpVerificationGridState extends State<OtpVerificationGrid>
     with SingleTickerProviderStateMixin {
   late List<TextEditingController> _controllers;
   late List<FocusNode> _focusNodes;
+  // One key-listener node per box, created once (a fresh FocusNode in build()
+  // leaked a node on every rebuild).
+  late final List<FocusNode> _keyNodes =
+      List.generate(4, (_) => FocusNode(skipTraversal: true));
   bool _isVerifying = false;
+  bool _cashConfirmed = false;
   String? _serverError;
 
   late AnimationController _shakeController;
@@ -57,6 +69,9 @@ class _OtpVerificationGridState extends State<OtpVerificationGrid>
     for (var fn in _focusNodes) {
       fn.dispose();
     }
+    for (var fn in _keyNodes) {
+      fn.dispose();
+    }
     _shakeController.dispose();
     super.dispose();
   }
@@ -65,6 +80,13 @@ class _OtpVerificationGridState extends State<OtpVerificationGrid>
     // Auto-submit on the 4th digit plus the button (or a re-edit of the last
     // box) can fire twice; each wrong call burns a server-side attempt.
     if (_isVerifying) return;
+    if (!_cashConfirmed) {
+      setState(() {
+        _serverError = 'Confirm you collected ${formatRupees(widget.amountDue)} first';
+      });
+      HapticFeedback.mediumImpact();
+      return;
+    }
     final otp = _controllers.map((c) => c.text.trim()).join();
     if (otp.length != 4) {
       setState(() {
@@ -82,7 +104,7 @@ class _OtpVerificationGridState extends State<OtpVerificationGrid>
 
     try {
       final orderProvider = Provider.of<OrderProvider>(context, listen: false);
-      final error = await orderProvider.verifyDelivery(widget.orderId, otp);
+      final error = await orderProvider.verifyDelivery(widget.orderId, otp, widget.amountDue);
 
       if (!mounted) return;
 
@@ -167,7 +189,40 @@ class _OtpVerificationGridState extends State<OtpVerificationGrid>
                 .bodySmall
                 ?.copyWith(color: scheme.onSurfaceVariant, height: 1.4),
           ),
-          const SizedBox(height: 24),
+          const SizedBox(height: AppTokens.s12),
+          Container(
+            padding: const EdgeInsets.all(AppTokens.s12),
+            decoration: BoxDecoration(
+              color: scheme.primaryContainer.withValues(alpha: 0.5),
+              borderRadius: BorderRadius.circular(AppTokens.rMd),
+            ),
+            child: Row(
+              children: [
+                Icon(Icons.payments_outlined, color: scheme.primary),
+                const SizedBox(width: AppTokens.s8),
+                Expanded(
+                  child: Text(
+                    'Collect ${formatRupees(widget.amountDue)} in cash',
+                    style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 15),
+                  ),
+                ),
+              ],
+            ),
+          ),
+          CheckboxListTile(
+            contentPadding: EdgeInsets.zero,
+            controlAffinity: ListTileControlAffinity.leading,
+            dense: true,
+            value: _cashConfirmed,
+            onChanged: _isVerifying
+                ? null
+                : (v) => setState(() {
+                      _cashConfirmed = v ?? false;
+                      if (_cashConfirmed) _serverError = null;
+                    }),
+            title: Text('I have collected ${formatRupees(widget.amountDue)}'),
+          ),
+          const SizedBox(height: AppTokens.s8),
           AnimatedBuilder(
             animation: _shakeAnimation,
             builder: (context, child) {
@@ -189,7 +244,7 @@ class _OtpVerificationGridState extends State<OtpVerificationGrid>
                   width: 56,
                   height: 56,
                   child: KeyboardListener(
-                    focusNode: FocusNode(skipTraversal: true), // dedicated listener node
+                    focusNode: _keyNodes[index], // dedicated listener node
                     onKeyEvent: (event) => _onDigitDelete(index, event),
                     child: TextFormField(
                       controller: _controllers[index],
@@ -255,7 +310,7 @@ class _OtpVerificationGridState extends State<OtpVerificationGrid>
           ),
         ),
         ElevatedButton(
-          onPressed: _isVerifying ? null : _verifyOtp,
+          onPressed: _isVerifying || !_cashConfirmed ? null : _verifyOtp,
           style: ElevatedButton.styleFrom(
             backgroundColor: scheme.primary,
             foregroundColor: scheme.onPrimary,

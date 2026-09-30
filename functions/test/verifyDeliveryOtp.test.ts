@@ -53,7 +53,7 @@ describe("verifyDeliveryOtp", () => {
     await seedOrder("order1");
 
     const result = await verifyDeliveryOtp.run(
-      callableRequest({ orderId: "order1", otp: "1234" }, "rider1")
+      callableRequest({ orderId: "order1", otp: "1234", collectedAmount: 130 }, "rider1")
     );
     expect(result.success).toBe(true);
 
@@ -77,7 +77,7 @@ describe("verifyDeliveryOtp", () => {
       await db.collection("config").doc("app").set({ riderPayoutPerDelivery: 42 });
       await seedOrder("order1");
 
-      await verifyDeliveryOtp.run(callableRequest({ orderId: "order1", otp: "1234" }, "rider1"));
+      await verifyDeliveryOtp.run(callableRequest({ orderId: "order1", otp: "1234", collectedAmount: 130 }, "rider1"));
 
       // A later rate change must not reprice the delivered order.
       await db.collection("config").doc("app").set({ riderPayoutPerDelivery: 99 });
@@ -88,7 +88,7 @@ describe("verifyDeliveryOtp", () => {
     it("falls back to the default payout when none is configured", async () => {
       await seedOrder("order1");
 
-      await verifyDeliveryOtp.run(callableRequest({ orderId: "order1", otp: "1234" }, "rider1"));
+      await verifyDeliveryOtp.run(callableRequest({ orderId: "order1", otp: "1234", collectedAmount: 130 }, "rider1"));
 
       const snap = await db.collection("orders").doc("order1").get();
       expect(snap.data()?.riderPayout).toBe(30);
@@ -98,7 +98,7 @@ describe("verifyDeliveryOtp", () => {
       await seedOrder("order1");
 
       await expect(
-        verifyDeliveryOtp.run(callableRequest({ orderId: "order1", otp: "0000" }, "rider1"))
+        verifyDeliveryOtp.run(callableRequest({ orderId: "order1", otp: "0000", collectedAmount: 130 }, "rider1"))
       ).rejects.toThrow();
 
       const snap = await db.collection("orders").doc("order1").get();
@@ -111,7 +111,7 @@ describe("verifyDeliveryOtp", () => {
       await seedOrder("order1");
 
       await expect(
-        verifyDeliveryOtp.run(callableRequest({ orderId: "order1", otp: "0000" }, "rider1"))
+        verifyDeliveryOtp.run(callableRequest({ orderId: "order1", otp: "0000", collectedAmount: 130 }, "rider1"))
       ).rejects.toThrow(/Incorrect delivery OTP\. 4 attempts left/);
 
       const secret = await readSecret("order1");
@@ -126,7 +126,7 @@ describe("verifyDeliveryOtp", () => {
       await seedOrder("order1", {}, { attempts: 4, totalAttempts: 4 });
 
       await expect(
-        verifyDeliveryOtp.run(callableRequest({ orderId: "order1", otp: "0000" }, "rider1"))
+        verifyDeliveryOtp.run(callableRequest({ orderId: "order1", otp: "0000", collectedAmount: 130 }, "rider1"))
       ).rejects.toThrow(/Locked for 10 minutes/);
 
       const secret = await readSecret("order1");
@@ -139,7 +139,7 @@ describe("verifyDeliveryOtp", () => {
       await seedOrder("order1", {}, { attempts: 0, totalAttempts: 5, lockedUntil: minutesFromNow(7) });
 
       await expect(
-        verifyDeliveryOtp.run(callableRequest({ orderId: "order1", otp: "1234" }, "rider1"))
+        verifyDeliveryOtp.run(callableRequest({ orderId: "order1", otp: "1234", collectedAmount: 130 }, "rider1"))
       ).rejects.toThrow(/Try again in \d+ minutes?/);
 
       const orderSnap = await db.collection("orders").doc("order1").get();
@@ -154,7 +154,7 @@ describe("verifyDeliveryOtp", () => {
       );
 
       const result = await verifyDeliveryOtp.run(
-        callableRequest({ orderId: "order1", otp: "1234" }, "rider1")
+        callableRequest({ orderId: "order1", otp: "1234", collectedAmount: 130 }, "rider1")
       );
       expect(result.success).toBe(true);
     });
@@ -167,7 +167,7 @@ describe("verifyDeliveryOtp", () => {
       );
 
       await expect(
-        verifyDeliveryOtp.run(callableRequest({ orderId: "order1", otp: "0000" }, "rider1"))
+        verifyDeliveryOtp.run(callableRequest({ orderId: "order1", otp: "0000", collectedAmount: 130 }, "rider1"))
       ).rejects.toThrow(/4 attempts left/);
 
       const secret = await readSecret("order1");
@@ -180,7 +180,7 @@ describe("verifyDeliveryOtp", () => {
       await seedOrder("order1", {}, { attempts: 0, totalAttempts: 15, lockedUntil: minutesFromNow(-60) });
 
       await expect(
-        verifyDeliveryOtp.run(callableRequest({ orderId: "order1", otp: "1234" }, "rider1"))
+        verifyDeliveryOtp.run(callableRequest({ orderId: "order1", otp: "1234", collectedAmount: 130 }, "rider1"))
       ).rejects.toThrow(/Ask the admin to reset OTP verification/);
     });
 
@@ -188,7 +188,7 @@ describe("verifyDeliveryOtp", () => {
       await seedOrder("order1", {}, { attempts: 4 });
 
       await expect(
-        verifyDeliveryOtp.run(callableRequest({ orderId: "order1", otp: "0000" }, "rider1"))
+        verifyDeliveryOtp.run(callableRequest({ orderId: "order1", otp: "0000", collectedAmount: 130 }, "rider1"))
       ).rejects.toThrow(/Locked for 10 minutes/);
     });
   });
@@ -197,10 +197,10 @@ describe("verifyDeliveryOtp", () => {
     it("a retry after the first call already delivered the order succeeds without touching stock again", async () => {
       await seedOrder("order1");
 
-      await verifyDeliveryOtp.run(callableRequest({ orderId: "order1", otp: "1234" }, "rider1"));
+      await verifyDeliveryOtp.run(callableRequest({ orderId: "order1", otp: "1234", collectedAmount: 130 }, "rider1"));
       // Response was lost; the rider's app retries with the same OTP.
       const retry = await verifyDeliveryOtp.run(
-        callableRequest({ orderId: "order1", otp: "1234" }, "rider1")
+        callableRequest({ orderId: "order1", otp: "1234", collectedAmount: 130 }, "rider1")
       );
       expect(retry.success).toBe(true);
 
@@ -219,8 +219,86 @@ describe("verifyDeliveryOtp", () => {
       await seedOrder("order1", { status: "delivered" });
 
       await expect(
-        verifyDeliveryOtp.run(callableRequest({ orderId: "order1", otp: "1234" }, "otherRider"))
+        verifyDeliveryOtp.run(callableRequest({ orderId: "order1", otp: "1234", collectedAmount: 130 }, "otherRider"))
       ).rejects.toThrow(/not assigned to you/);
+    });
+  });
+
+  describe("COD collection confirmation", () => {
+    it("records the amount the rider confirmed and marks the order paid", async () => {
+      await seedOrder("order1", { totalAmount: 130 });
+
+      await verifyDeliveryOtp.run(
+        callableRequest({ orderId: "order1", otp: "1234", collectedAmount: 130 }, "rider1")
+      );
+
+      const order = (await db.collection("orders").doc("order1").get()).data();
+      expect(order?.status).toBe("delivered");
+      expect(order?.paymentStatus).toBe("paid");
+      expect(order?.codCollectedAmount).toBe(130);
+      expect(order?.codCollectedBy).toBe("rider1");
+    });
+
+    it("refuses to deliver without a collected amount", async () => {
+      await seedOrder("order1");
+      for (const data of [
+        { orderId: "order1", otp: "1234" },
+        { orderId: "order1", otp: "1234", collectedAmount: "130" },
+        { orderId: "order1", otp: "1234", collectedAmount: null },
+        { orderId: "order1", otp: "1234", collectedAmount: -1 },
+      ]) {
+        await expect(
+          verifyDeliveryOtp.run(callableRequest(data, "rider1"))
+        ).rejects.toThrow(/Confirm the cash you collected/);
+      }
+      expect((await db.collection("orders").doc("order1").get()).data()?.status).toBe("out_for_delivery");
+    });
+
+    it("refuses a collected amount that isn't the order total, without spending an OTP attempt or touching stock", async () => {
+      await seedOrder("order1", { totalAmount: 130 });
+
+      await expect(
+        verifyDeliveryOtp.run(
+          callableRequest({ orderId: "order1", otp: "1234", collectedAmount: 100 }, "rider1")
+        )
+      ).rejects.toThrow(/Collect exactly ₹130/);
+
+      const order = (await db.collection("orders").doc("order1").get()).data();
+      expect(order?.status).toBe("out_for_delivery");
+      expect(order?.codCollectedAmount).toBeUndefined();
+      expect((await readSecret("order1")).attempts).toBe(0);
+      const product = (await db.collection("products").doc("prod1").get()).data();
+      expect(product?.physicalStock).toBe(10);
+    });
+
+    it("compares to the paisa, not as floating point", async () => {
+      await seedOrder("order1", { totalAmount: 129.9 });
+      await verifyDeliveryOtp.run(
+        callableRequest({ orderId: "order1", otp: "1234", collectedAmount: 129.9 }, "rider1")
+      );
+      expect((await db.collection("orders").doc("order1").get()).data()?.status).toBe("delivered");
+    });
+
+    it("still validates the OTP once the amount is right", async () => {
+      await seedOrder("order1", { totalAmount: 130 });
+      await expect(
+        verifyDeliveryOtp.run(
+          callableRequest({ orderId: "order1", otp: "0000", collectedAmount: 130 }, "rider1")
+        )
+      ).rejects.toThrow(/Incorrect delivery OTP/);
+      expect((await readSecret("order1")).attempts).toBe(1);
+    });
+
+    it("keeps a retry of an already-delivered order idempotent without a new amount", async () => {
+      await seedOrder("order1", { totalAmount: 130 });
+      await verifyDeliveryOtp.run(
+        callableRequest({ orderId: "order1", otp: "1234", collectedAmount: 130 }, "rider1")
+      );
+      const retry = await verifyDeliveryOtp.run(
+        callableRequest({ orderId: "order1", otp: "1234" }, "rider1")
+      );
+      expect(retry.success).toBe(true);
+      expect((await db.collection("orders").doc("order1").get()).data()?.codCollectedAmount).toBe(130);
     });
   });
 
@@ -229,7 +307,7 @@ describe("verifyDeliveryOtp", () => {
     await db.collection("deliveryBoys").doc("rider1").set({ isActive: false });
 
     await expect(
-      verifyDeliveryOtp.run(callableRequest({ orderId: "order1", otp: "1234" }, "rider1"))
+      verifyDeliveryOtp.run(callableRequest({ orderId: "order1", otp: "1234", collectedAmount: 130 }, "rider1"))
     ).rejects.toThrow(/deactivated/);
 
     const orderSnap = await db.collection("orders").doc("order1").get();
@@ -238,7 +316,7 @@ describe("verifyDeliveryOtp", () => {
 
   it("marks the order stockReleased so a later cancel can't release the consumed reservation", async () => {
     await seedOrder("order1");
-    await verifyDeliveryOtp.run(callableRequest({ orderId: "order1", otp: "1234" }, "rider1"));
+    await verifyDeliveryOtp.run(callableRequest({ orderId: "order1", otp: "1234", collectedAmount: 130 }, "rider1"));
     const orderSnap = await db.collection("orders").doc("order1").get();
     expect(orderSnap.data()?.stockReleased).toBe(true);
   });
@@ -247,7 +325,7 @@ describe("verifyDeliveryOtp", () => {
     await seedOrder("order1");
 
     await expect(
-      verifyDeliveryOtp.run(callableRequest({ orderId: "order1", otp: "1234" }, "otherRider"))
+      verifyDeliveryOtp.run(callableRequest({ orderId: "order1", otp: "1234", collectedAmount: 130 }, "otherRider"))
     ).rejects.toThrow(/not assigned to you/);
   });
 
@@ -255,13 +333,13 @@ describe("verifyDeliveryOtp", () => {
     await seedOrder("order1", { status: "picked_up" });
 
     await expect(
-      verifyDeliveryOtp.run(callableRequest({ orderId: "order1", otp: "1234" }, "rider1"))
+      verifyDeliveryOtp.run(callableRequest({ orderId: "order1", otp: "1234", collectedAmount: 130 }, "rider1"))
     ).rejects.toThrow(/not out for delivery/);
   });
 
   it("rejects a malformed OTP before touching Firestore", async () => {
     await expect(
-      verifyDeliveryOtp.run(callableRequest({ orderId: "order1", otp: "12" }, "rider1"))
+      verifyDeliveryOtp.run(callableRequest({ orderId: "order1", otp: "12", collectedAmount: 130 }, "rider1"))
     ).rejects.toThrow(/4-digit OTP/);
   });
 });

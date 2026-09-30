@@ -65,6 +65,9 @@ class OrderDto extends Order {
     super.cancelReason,
     super.cancelledBy,
     super.riderPayout,
+    super.codCollectedAmount,
+    super.paymentStatus,
+    super.deliveredAt,
   });
 
   factory OrderDto.fromMap(Map<String, dynamic> map, String documentId) {
@@ -98,6 +101,9 @@ class OrderDto extends Order {
       cancelReason: map['cancelReason'] as String?,
       cancelledBy: map['cancelledBy'] as String?,
       riderPayout: (map['riderPayout'] as num?)?.toDouble(),
+      codCollectedAmount: (map['codCollectedAmount'] as num?)?.toDouble(),
+      paymentStatus: (map['paymentStatus'] as String?) ?? 'pending',
+      deliveredAt: (map['deliveredAt'] as Timestamp?)?.toDate(),
     );
   }
 }

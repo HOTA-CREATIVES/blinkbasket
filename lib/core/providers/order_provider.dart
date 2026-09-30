@@ -181,8 +181,8 @@ class OrderProvider with ChangeNotifier {
 
   /// Rider-side delivery confirmation. Returns null on success,
   /// or a user-readable error message.
-  Future<String?> verifyDelivery(String orderId, String otp) async {
-    return _verifyDeliveryOtpUseCase(orderId, otp);
+  Future<String?> verifyDelivery(String orderId, String otp, double collectedAmount) async {
+    return _verifyDeliveryOtpUseCase(orderId, otp, collectedAmount);
   }
 
   /// Customer-side OTP lookup for an active order.

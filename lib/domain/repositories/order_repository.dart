@@ -62,8 +62,10 @@ abstract class OrderRepository {
   Future<String?> cancelOrder(String orderId, {String? reason});
 
   /// Verifies the customer's delivery OTP via the verifyDeliveryOtp Cloud
-  /// Function. Returns null on success, or a user-readable error message.
-  Future<String?> verifyDeliveryOtp(String orderId, String otp);
+  /// Function and records the cash the rider confirms collecting
+  /// ([collectedAmount] must equal the order total). Returns null on success,
+  /// or a user-readable error message.
+  Future<String?> verifyDeliveryOtp(String orderId, String otp, double collectedAmount);
 
   /// Reads the delivery OTP for one of the customer's own orders.
   /// Only callable by the ordering customer (Firestore rules enforce this).

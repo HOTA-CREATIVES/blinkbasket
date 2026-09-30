@@ -12,6 +12,8 @@ import '../../../core/providers/config_provider.dart';
 import '../../../core/providers/order_provider.dart';
 import '../../../core/utils/reorder_helper.dart';
 import '../../../core/providers/product_provider.dart';
+import '../../../core/utils/date_format.dart';
+import '../../../core/utils/money.dart';
 import '../../../core/utils/route_generator.dart';
 import '../../../domain/entities/app_config.dart';
 import '../../../domain/entities/order.dart';
@@ -354,7 +356,7 @@ class OrderTrackingScreen extends StatelessWidget {
                                 ),
                               ),
                               Text(
-                                '₹${(item.price * item.quantity).toStringAsFixed(2)}',
+                                formatRupees(item.price * item.quantity),
                                 style:
                                     const TextStyle(fontWeight: FontWeight.w600),
                               ),
@@ -362,6 +364,38 @@ class OrderTrackingScreen extends StatelessWidget {
                           ),
                         );
                       }),
+                      const Divider(height: AppTokens.s24),
+                      _BillLine(
+                        label: 'Item total',
+                        value: formatRupees(order.subtotal > 0
+                            ? order.subtotal
+                            : order.totalAmount - order.deliveryFee),
+                      ),
+                      _BillLine(
+                        label: 'Delivery fee',
+                        value: order.deliveryFee == 0
+                            ? 'Free'
+                            : formatRupees(order.deliveryFee),
+                      ),
+                      _BillLine(
+                        label: order.status == 'delivered' ? 'Total paid' : 'Total',
+                        value: formatRupees(order.totalAmount),
+                        emphasised: true,
+                      ),
+                      if (order.status == 'delivered') ...[
+                        const SizedBox(height: AppTokens.s8),
+                        _BillLine(
+                          label: 'Paid in cash to '
+                              '${order.deliveryBoyName ?? 'your delivery partner'}',
+                          value: formatRupees(
+                              order.codCollectedAmount ?? order.totalAmount),
+                        ),
+                        if (order.deliveredAt != null)
+                          _BillLine(
+                            label: 'Delivered',
+                            value: formatDateTime(order.deliveredAt!),
+                          ),
+                      ],
                     ],
                   ),
                 ),
@@ -487,6 +521,41 @@ class _LiveEtaCountdownState extends State<_LiveEtaCountdown> {
           ),
         );
       },
+    );
+  }
+}
+
+/// One label/value row of the bill on the order screen.
+class _BillLine extends StatelessWidget {
+  final String label;
+  final String value;
+  final bool emphasised;
+
+  const _BillLine({
+    required this.label,
+    required this.value,
+    this.emphasised = false,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final style = TextStyle(
+      fontSize: emphasised ? 15 : 13.5,
+      fontWeight: emphasised ? FontWeight.w800 : FontWeight.w500,
+      color: emphasised ? scheme.onSurface : scheme.onSurfaceVariant,
+    );
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: AppTokens.s4),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Expanded(child: Text(label, style: style)),
+          const SizedBox(width: AppTokens.s12),
+          Text(value, style: style),
+        ],
+      ),
     );
   }
 }

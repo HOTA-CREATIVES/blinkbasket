@@ -54,6 +54,7 @@ class _TaskDetailBody extends StatefulWidget {
 class _TaskDetailScreenState extends State<_TaskDetailBody> {
   // State to track checked items during packing
   final Map<String, bool> _checkedItems = {};
+  bool _isAdvancing = false;
 
   @override
   void initState() {
@@ -240,6 +241,7 @@ class _TaskDetailScreenState extends State<_TaskDetailBody> {
       builder: (dialogContext) {
         return OtpVerificationGrid(
           orderId: widget.order.id,
+          amountDue: widget.order.totalAmount,
           onSuccess: () {
             Navigator.pop(dialogContext); // Close dialog
             if (!mounted) return;
@@ -258,6 +260,96 @@ class _TaskDetailScreenState extends State<_TaskDetailBody> {
         );
       },
     );
+  }
+
+  /// Moves the order to its next status (or opens OTP verification for the
+  /// final step). Guarded by [_isAdvancing]: the slider snaps back after a
+  /// moment, so without the guard a second swipe during the network call sent
+  /// a duplicate update and then reported a spurious failure.
+  Future<void> _advance(
+    OrderProvider orderProvider,
+    String nextStatus,
+    Color nextColor,
+  ) async {
+    if (_isAdvancing) return;
+    setState(() => _isAdvancing = true);
+    try {
+      await _advanceOnce(orderProvider, nextStatus, nextColor);
+    } finally {
+      if (mounted) setState(() => _isAdvancing = false);
+    }
+  }
+
+  Future<void> _advanceOnce(
+    OrderProvider orderProvider,
+    String nextStatus,
+    Color nextColor,
+  ) async {
+          final messenger = ScaffoldMessenger.of(context);
+          final navigator = Navigator.of(context);
+
+          if (nextStatus == 'delivered') {
+            if (!mounted) return;
+            _showOtpVerification(orderProvider);
+          } else {
+            // The item checklist is a pickup step (the rider
+            // is in the store) — gate it here, not at the
+            // customer's door.
+            if (nextStatus == 'picked_up' &&
+                _checkedItems.values.any((checked) => !checked)) {
+              final proceed = await showDialog<bool>(
+                context: context,
+                builder:
+                    (dialogCtx) => AlertDialog(
+                      title: const Text('Unchecked Items'),
+                      content: const Text(
+                        'Some items in the checklist are not checked off yet. Have you collected all items?',
+                      ),
+                      actions: [
+                        TextButton(
+                          onPressed:
+                              () => Navigator.pop(dialogCtx, false),
+                          child: const Text('Review Checklist'),
+                        ),
+                        ElevatedButton(
+                          onPressed:
+                              () => Navigator.pop(dialogCtx, true),
+                          child: const Text('Pick Up Anyway'),
+                        ),
+                      ],
+                    ),
+              );
+              if (proceed != true || !mounted) return;
+            }
+            final err = await orderProvider.updateStatus(
+              widget.order.id,
+              nextStatus,
+            );
+            if (!mounted) return;
+            if (err != null) {
+              messenger.showSnackBar(
+                SnackBar(
+                  content: Text('Failed to update status: $err'),
+                  backgroundColor: Colors.red,
+                  behavior: SnackBarBehavior.floating,
+                ),
+              );
+              return;
+            }
+            navigator.pop(); // Return to list view
+            messenger.showSnackBar(
+              SnackBar(
+                content: Text(
+                  'Status updated to: ${nextStatus.replaceAll("_", " ").toUpperCase()}',
+                  style: const TextStyle(
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+                backgroundColor: nextColor,
+                behavior: SnackBarBehavior.floating,
+              ),
+            );
+          }
   }
 
   @override
@@ -629,73 +721,9 @@ class _TaskDetailScreenState extends State<_TaskDetailBody> {
                       SwipeToConfirmSlider(
                         text: _getNextStatusText(widget.order.status),
                         color: nextColor,
-                        onSwipeCompleted: () async {
-                          final messenger = ScaffoldMessenger.of(context);
-                          final navigator = Navigator.of(context);
-
-                          if (nextStatus == 'delivered') {
-                            if (!mounted) return;
-                            _showOtpVerification(orderProvider);
-                          } else {
-                            // The item checklist is a pickup step (the rider
-                            // is in the store) — gate it here, not at the
-                            // customer's door.
-                            if (nextStatus == 'picked_up' &&
-                                _checkedItems.values.any((checked) => !checked)) {
-                              final proceed = await showDialog<bool>(
-                                context: context,
-                                builder:
-                                    (dialogCtx) => AlertDialog(
-                                      title: const Text('Unchecked Items'),
-                                      content: const Text(
-                                        'Some items in the checklist are not checked off yet. Have you collected all items?',
-                                      ),
-                                      actions: [
-                                        TextButton(
-                                          onPressed:
-                                              () => Navigator.pop(dialogCtx, false),
-                                          child: const Text('Review Checklist'),
-                                        ),
-                                        ElevatedButton(
-                                          onPressed:
-                                              () => Navigator.pop(dialogCtx, true),
-                                          child: const Text('Pick Up Anyway'),
-                                        ),
-                                      ],
-                                    ),
-                              );
-                              if (proceed != true || !mounted) return;
-                            }
-                            final err = await orderProvider.updateStatus(
-                              widget.order.id,
-                              nextStatus,
-                            );
-                            if (!mounted) return;
-                            if (err != null) {
-                              messenger.showSnackBar(
-                                SnackBar(
-                                  content: Text('Failed to update status: $err'),
-                                  backgroundColor: Colors.red,
-                                  behavior: SnackBarBehavior.floating,
-                                ),
-                              );
-                              return;
-                            }
-                            navigator.pop(); // Return to list view
-                            messenger.showSnackBar(
-                              SnackBar(
-                                content: Text(
-                                  'Status updated to: ${nextStatus.replaceAll("_", " ").toUpperCase()}',
-                                  style: const TextStyle(
-                                    fontWeight: FontWeight.bold,
-                                  ),
-                                ),
-                                backgroundColor: nextColor,
-                                behavior: SnackBarBehavior.floating,
-                              ),
-                            );
-                          }
-                        },
+                        enabled: !_isAdvancing,
+                        onSwipeCompleted: () =>
+                            _advance(orderProvider, nextStatus, nextColor),
                       ),
                     ],
                   ),

@@ -149,10 +149,14 @@ class FirebaseOrderRepository implements OrderRepository {
   }
 
   @override
-  Future<String?> verifyDeliveryOtp(String orderId, String otp) async {
+  Future<String?> verifyDeliveryOtp(String orderId, String otp, double collectedAmount) async {
     try {
       final callable = _functions.httpsCallable('verifyDeliveryOtp');
-      await callable.call<dynamic>({'orderId': orderId, 'otp': otp});
+      await callable.call<dynamic>({
+        'orderId': orderId,
+        'otp': otp,
+        'collectedAmount': collectedAmount,
+      });
       return null;
     } on FirebaseFunctionsException catch (e) {
       return e.message ?? 'OTP verification failed. Please try again.';
