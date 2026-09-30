@@ -38,6 +38,9 @@ const minutesFromNow = (m: number) => Timestamp.fromMillis(Date.now() + m * 60_0
 describe("verifyDeliveryOtp", () => {
   beforeEach(async () => {
     await clearFirestore();
+    // verifyDeliveryOtp re-reads the live rider doc, so riders must exist.
+    await db.collection("deliveryBoys").doc("rider1").set({ isActive: true });
+    await db.collection("deliveryBoys").doc("otherRider").set({ isActive: true });
     await db.collection("products").doc("prod1").set({
       name: "Test Product",
       physicalStock: 10,
@@ -219,6 +222,25 @@ describe("verifyDeliveryOtp", () => {
         verifyDeliveryOtp.run(callableRequest({ orderId: "order1", otp: "1234" }, "otherRider"))
       ).rejects.toThrow(/not assigned to you/);
     });
+  });
+
+  it("rejects a deactivated rider even on their own assigned order", async () => {
+    await seedOrder("order1");
+    await db.collection("deliveryBoys").doc("rider1").set({ isActive: false });
+
+    await expect(
+      verifyDeliveryOtp.run(callableRequest({ orderId: "order1", otp: "1234" }, "rider1"))
+    ).rejects.toThrow(/deactivated/);
+
+    const orderSnap = await db.collection("orders").doc("order1").get();
+    expect(orderSnap.data()?.status).toBe("out_for_delivery");
+  });
+
+  it("marks the order stockReleased so a later cancel can't release the consumed reservation", async () => {
+    await seedOrder("order1");
+    await verifyDeliveryOtp.run(callableRequest({ orderId: "order1", otp: "1234" }, "rider1"));
+    const orderSnap = await db.collection("orders").doc("order1").get();
+    expect(orderSnap.data()?.stockReleased).toBe(true);
   });
 
   it("rejects verification from a rider the order isn't assigned to", async () => {

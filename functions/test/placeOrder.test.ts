@@ -93,6 +93,47 @@ describe("placeOrder", () => {
     expect(orderSnap.data()?.items[0].price).toBe(50);
   });
 
+  describe("idempotency (requestId)", () => {
+    it("returns the existing order on a retry instead of failing or double-reserving", async () => {
+      await seedUser("cust1");
+      await seedProduct("prod1", { price: 50, physicalStock: 10, availableStock: 10 });
+      await seedConfig();
+
+      const first = await placeOrder.run(order("cust1", { requestId: "req-abc-12345" }));
+      const retry = await placeOrder.run(order("cust1", { requestId: "req-abc-12345" }));
+
+      expect(retry.orderId).toBe(first.orderId);
+      expect(retry.otp).toBe(first.otp);
+      expect(retry.totalAmount).toBe(first.totalAmount);
+      expect(retry.deduplicated).toBe(true);
+
+      const orders = await db.collection("orders").where("customerId", "==", "cust1").get();
+      expect(orders.size).toBe(1);
+      const productSnap = await db.collection("products").doc("prod1").get();
+      expect(productSnap.data()?.reservedStock).toBe(1);
+    });
+
+    it("does not let a different customer collide on the same requestId", async () => {
+      await seedUser("cust1");
+      await seedUser("cust2");
+      await seedProduct("prod1", { price: 50, physicalStock: 10, availableStock: 10 });
+      await seedConfig();
+
+      const a = await placeOrder.run(order("cust1", { requestId: "req-abc-12345" }));
+      const b = await placeOrder.run(order("cust2", { requestId: "req-abc-12345" }));
+      expect(b.orderId).not.toBe(a.orderId);
+    });
+
+    it("rejects a malformed requestId", async () => {
+      await seedUser("cust1");
+      await seedProduct("prod1");
+      await seedConfig();
+      await expect(
+        placeOrder.run(order("cust1", { requestId: "bad id!" }))
+      ).rejects.toThrow(/Invalid request id/);
+    });
+  });
+
   it("waives the delivery fee once the subtotal exceeds the free-delivery threshold", async () => {
     await seedUser("cust1");
     await seedProduct("prod1", { price: 200, availableStock: 10 });

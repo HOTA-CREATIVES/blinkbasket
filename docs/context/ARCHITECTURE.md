@@ -30,6 +30,9 @@ The layering is real but has known leaks: `order_history_screen.dart:255` and `o
 3. **Admin-only writes**: `/products`, `/config`, `/inventoryLogs`, `/banners` are admin-claim gated in [firestore.rules](../../firestore.rules).
 4. **`delivered` only via `verifyDeliveryOtp`**; order status advances exactly one step per rider action; OTP lives in `orders/{id}/private/delivery` readable only by the ordering customer.
 5. **Broadcast dispatch**: orders are claimed exclusively by riders through `acceptOrder` (transactional first-wins); `escalateStaleOrders` re-broadcasts every 90 s forever; `expireStaleOrders` auto-cancels >24 h pending orders and releases stock.
+6. **Riders never see customer PII before accepting.** Unclaimed orders are exposed to riders only through `/orderOffers/{orderId}` (first name, village, items, totals; written by the `onOrderWritten` trigger, client writes denied). The full order — phone, street address, GPS pin — becomes readable to a rider only once `acceptOrder` sets `deliveryBoyId` to them.
+7. **Admin order writes are narrow.** Rules let an admin only cancel an open order or hand it back to the pool (`status` → `cancelled`/`pending`); `delivered` is reachable solely via `verifyDeliveryOtp`, and money/items are immutable. The `cancelOrder` callable refuses `delivered`/`cancelled` orders for everyone. `isAdmin()` also checks `admins/{uid}.isActive`, and deactivating a rider/admin disables the Auth user and revokes refresh tokens (`onRiderWritten` / `onAdminWritten`).
+8. **Idempotent placement.** `placeOrder` accepts a client `requestId`; the order id is derived from `(uid, requestId)`, so a retry returns the existing order (`deduplicated: true`). Rate limits are Firestore-backed (`/rateLimits`, set a TTL policy on `expireAt`). A failed stock release flags the order `stockReleaseFailed` and `repairStockReleases` (every 15 min) retries it.
 
 ## Mermaid — order lifecycle
 

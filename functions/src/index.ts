@@ -6,7 +6,7 @@ import { initializeApp } from "firebase-admin/app";
 import { getFirestore, FieldValue, Timestamp } from "firebase-admin/firestore";
 import { getAuth } from "firebase-admin/auth";
 import { getMessaging } from "firebase-admin/messaging";
-import { createHash, randomBytes, randomInt } from "crypto";
+import { createHash, randomBytes, randomInt, timingSafeEqual } from "crypto";
 
 initializeApp();
 const db = getFirestore();
@@ -34,27 +34,44 @@ const ACTIVE_ORDER_STATUSES = ["pending", "assigned", "picked_up", "out_for_deli
 const ACTIVE_ORDER_MESSAGE =
   "You already have an active order in progress. You can only place one order at a time.";
 
-// ── Simple in-memory rate limiter ────────────────────────────────────
-// Resets when the function instance cold-starts. For stricter limits,
-// use Firebase App Check + Cloud Armor or a Redis-backed counter.
+// ── Firestore-backed rate limiter ────────────────────────────────────
+// Counters live in /rateLimits/{action}_{uid} (client access is denied by the
+// catch-all rule), so limits hold across function instances and cold starts.
+// Set a TTL policy on `expireAt` to garbage-collect old windows.
 const RATE_LIMIT_WINDOW_MS = 60_000; // 1 minute
 const RATE_LIMIT_MAX_CALLS = 20;     // max calls per window per UID
-const rateLimitStore = new Map<string, { count: number; windowStart: number }>();
 
-// Keyed by "action:uid" rather than uid alone — a burst on one callable
+// Keyed by "action_uid" rather than uid alone — a burst on one callable
 // (e.g. an admin uploading several product images via
 // getCloudinarySignature) must not lock the same user out of an unrelated
-// action (placeOrder, cancelOrder, ...).
-function checkRateLimit(uid: string, action: string): void {
-  const key = `${action}:${uid}`;
+// action (placeOrder, cancelOrder, ...). Infrastructure errors fail open so a
+// Firestore hiccup on the counter never takes ordering down with it.
+async function checkRateLimit(uid: string, action: string): Promise<void> {
+  const ref = db.collection("rateLimits").doc(`${action}_${uid}`);
   const now = Date.now();
-  const entry = rateLimitStore.get(key);
-  if (!entry || now - entry.windowStart > RATE_LIMIT_WINDOW_MS) {
-    rateLimitStore.set(key, { count: 1, windowStart: now });
+  let exceeded = false;
+  try {
+    exceeded = await db.runTransaction(async (tx) => {
+      const snap = await tx.get(ref);
+      const data = snap.data();
+      const windowStart = Number(data?.windowStart ?? 0);
+      if (!data || now - windowStart > RATE_LIMIT_WINDOW_MS) {
+        tx.set(ref, {
+          count: 1,
+          windowStart: now,
+          expireAt: Timestamp.fromMillis(now + 2 * RATE_LIMIT_WINDOW_MS),
+        });
+        return false;
+      }
+      if (Number(data.count ?? 0) >= RATE_LIMIT_MAX_CALLS) return true;
+      tx.update(ref, { count: FieldValue.increment(1) });
+      return false;
+    });
+  } catch (e) {
+    console.error(`[RATE_LIMIT_ERROR] ${action}_${uid}:`, e);
     return;
   }
-  entry.count++;
-  if (entry.count > RATE_LIMIT_MAX_CALLS) {
+  if (exceeded) {
     throw new HttpsError("resource-exhausted", "Too many requests. Please try again later.");
   }
 }
@@ -124,6 +141,74 @@ const CENTROID_PLACEHOLDER_METERS = 5;
 
 function isValidCoordinate(lat: number, lng: number): boolean {
   return Number.isFinite(lat) && Number.isFinite(lng) && Math.abs(lat) <= 90 && Math.abs(lng) <= 180;
+}
+
+/** Constant-time string comparison (avoids leaking OTP digits via timing). */
+function safeEqual(a: string, b: string): boolean {
+  const ab = Buffer.from(a);
+  const bb = Buffer.from(b);
+  return ab.length === bb.length && timingSafeEqual(ab, bb);
+}
+
+/** First name only — all a rider needs before accepting an order. */
+function firstName(value: unknown): string {
+  const n = String(value ?? "").trim().split(/\s+/)[0];
+  return n || "Customer";
+}
+
+/** Re-reads the live rider doc: a disabled or soft-deleted rider must not be
+ * able to act on orders through callables while a stale token is still valid. */
+async function assertActiveRider(uid: string): Promise<void> {
+  const snap = await db.collection("deliveryBoys").doc(uid).get();
+  const data = snap.data();
+  if (!data || data.isActive === false || data.isDeleted === true) {
+    throw new HttpsError("permission-denied", "Your account is deactivated. Contact support.");
+  }
+}
+
+/** True for an order that is open for any rider to claim. */
+function isOpenOffer(order: FirebaseFirestore.DocumentData | undefined): boolean {
+  return !!order && order.status === "pending" && !order.deliveryBoyId;
+}
+
+/**
+ * Maintains /orderOffers/{orderId}: the PII-free view of an unclaimed order
+ * that riders may read. The full order (customer phone, address, GPS pin) is
+ * readable only by the customer, an admin, and the rider who accepted it.
+ */
+async function syncOrderOffer(
+  orderId: string,
+  order: FirebaseFirestore.DocumentData | undefined
+): Promise<void> {
+  const ref = db.collection("orderOffers").doc(orderId);
+  try {
+    if (!order || !isOpenOffer(order)) {
+      await ref.delete();
+      return;
+    }
+    const items = Array.isArray(order.items) ? order.items : [];
+    await ref.set({
+      status: "pending",
+      deliveryBoyId: null,
+      customerName: firstName(order.customerName),
+      deliveryAddress: "",
+      village: String(order.village ?? ""),
+      items: items.map((i: any) => ({
+        productId: String(i?.productId ?? ""),
+        name: String(i?.name ?? ""),
+        price: Number(i?.price ?? 0),
+        quantity: Number(i?.quantity ?? 0),
+      })),
+      subtotal: Number(order.subtotal ?? 0),
+      deliveryFee: Number(order.deliveryFee ?? 0),
+      totalAmount: Number(order.totalAmount ?? 0),
+      paymentMethod: String(order.paymentMethod ?? "COD"),
+      createdAt: order.createdAt ?? Timestamp.now(),
+      updatedAt: Timestamp.now(),
+    });
+  } catch (e) {
+    console.error(`[OFFER_SYNC_FAILED] order ${orderId}:`, e);
+  }
 }
 
 async function getFcmTokens(collection: "users" | "deliveryBoys", uid: string): Promise<string[]> {
@@ -245,7 +330,7 @@ async function broadcastNewOrder(orderId: string, order: FirebaseFirestore.Docum
   await sendPushToTokens(
     tokens,
     "New delivery nearby",
-    `New order from ${order.customerName ?? "a customer"} in ${village}. Tap to accept.`,
+    `New order from ${firstName(order.customerName)} in ${village}. Tap to accept.`,
     { orderId, type: "new_order_offer" },
     tokenOwners
   );
@@ -270,7 +355,39 @@ export const placeOrder = onCall({ region: REGION, enforceAppCheck: process.env.
   if (!uid) {
     throw new HttpsError("unauthenticated", "Sign in to place an order.");
   }
-  checkRateLimit(uid, "placeOrder");
+  await checkRateLimit(uid, "placeOrder");
+
+  // Idempotency: the client sends one requestId per checkout attempt. The
+  // order id is derived from (uid, requestId), so a retry after a lost
+  // response returns the order that already exists instead of failing with
+  // "you already have an active order".
+  const requestId = String(request.data?.requestId ?? "").trim();
+  if (requestId && !/^[A-Za-z0-9_-]{8,64}$/.test(requestId)) {
+    throw new HttpsError("invalid-argument", "Invalid request id.");
+  }
+  const orderRef = requestId
+    ? db.collection("orders").doc(
+        createHash("sha256").update(`${uid}:${requestId}`).digest("hex").slice(0, 20)
+      )
+    : db.collection("orders").doc();
+  if (requestId) {
+    const existingSnap = await orderRef.get();
+    if (existingSnap.exists) {
+      const existing = existingSnap.data() as FirebaseFirestore.DocumentData;
+      if (existing.customerId !== uid) {
+        throw new HttpsError("permission-denied", "Invalid request id.");
+      }
+      const privateSnap = await orderRef.collection("private").doc("delivery").get();
+      return {
+        orderId: orderRef.id,
+        otp: String(privateSnap.data()?.otp ?? ""),
+        subtotal: Number(existing.subtotal ?? 0),
+        deliveryFee: Number(existing.deliveryFee ?? 0),
+        totalAmount: Number(existing.totalAmount ?? 0),
+        deduplicated: true,
+      };
+    }
+  }
 
   const items = request.data?.items as OrderItemInput[] | undefined;
   const deliveryAddress = String(request.data?.deliveryAddress ?? "").trim();
@@ -361,7 +478,6 @@ export const placeOrder = onCall({ region: REGION, enforceAppCheck: process.env.
   const minimumOrderAmount = Number(config.minimumOrderAmount ?? 0);
 
   const otp = String(randomInt(1000, 10000));
-  const orderRef = db.collection("orders").doc();
   const lockRef = db.collection("orderLocks").doc(uid);
 
   const totals = await db.runTransaction(async (tx) => {
@@ -516,7 +632,7 @@ export const cancelOrder = onCall({ region: REGION, enforceAppCheck: process.env
   if (!uid) {
     throw new HttpsError("unauthenticated", "Sign in to cancel an order.");
   }
-  checkRateLimit(uid, "cancelOrder");
+  await checkRateLimit(uid, "cancelOrder");
 
   const orderId = String(request.data?.orderId ?? "").trim();
   const reason = String(request.data?.reason ?? "Cancelled by customer").trim();
@@ -547,6 +663,15 @@ export const cancelOrder = onCall({ region: REGION, enforceAppCheck: process.env
       throw new HttpsError(
         "failed-precondition",
         `Order cannot be cancelled once in status '${order.status}'.`
+      );
+    }
+
+    // A closed order must never be re-cancelled: cancelling a delivered order
+    // would release stock that the delivery already consumed.
+    if (order.status === "delivered" || order.status === "cancelled") {
+      throw new HttpsError(
+        "failed-precondition",
+        `Order is already ${order.status} and can't be cancelled.`
       );
     }
 
@@ -587,7 +712,7 @@ export const reportDeliveryFailure = onCall({ region: REGION, enforceAppCheck: p
   if (!uid) {
     throw new HttpsError("unauthenticated", "Sign in first.");
   }
-  checkRateLimit(uid, "reportDeliveryFailure");
+  await checkRateLimit(uid, "reportDeliveryFailure");
 
   const orderId = String(request.data?.orderId ?? "").trim();
   const reasonInput = String(request.data?.reason ?? "").trim();
@@ -598,6 +723,7 @@ export const reportDeliveryFailure = onCall({ region: REGION, enforceAppCheck: p
   if (!orderId) {
     throw new HttpsError("invalid-argument", "Order ID is required.");
   }
+  await assertActiveRider(uid);
 
   const orderRef = db.collection("orders").doc(orderId);
 
@@ -640,13 +766,14 @@ export const verifyDeliveryOtp = onCall({ region: REGION, enforceAppCheck: proce
   if (!uid) {
     throw new HttpsError("unauthenticated", "Sign in first.");
   }
-  checkRateLimit(uid, "verifyDeliveryOtp");
+  await checkRateLimit(uid, "verifyDeliveryOtp");
 
   const orderId = String(request.data?.orderId ?? "");
   const otp = String(request.data?.otp ?? "").trim();
   if (!orderId || !/^\d{4}$/.test(otp)) {
     throw new HttpsError("invalid-argument", "Order ID and a 4-digit OTP are required.");
   }
+  await assertActiveRider(uid);
 
   const orderRef = db.collection("orders").doc(orderId);
 
@@ -694,7 +821,7 @@ export const verifyDeliveryOtp = onCall({ region: REGION, enforceAppCheck: proce
     // A lockout that has expired starts a fresh window of attempts.
     const windowAttempts = lockedUntilMs > 0 ? 0 : Number(secret.attempts ?? 0);
 
-    if (secret.otp !== otp) {
+    if (!safeEqual(String(secret.otp ?? ""), otp)) {
       const newWindow = windowAttempts + 1;
       const lockNow = newWindow >= MAX_OTP_ATTEMPTS;
       tx.update(privateRef, {
@@ -756,6 +883,9 @@ export const verifyDeliveryOtp = onCall({ region: REGION, enforceAppCheck: proce
     const deliveredNow = Timestamp.now();
     tx.update(orderRef, {
       status: "delivered",
+      // The reservation was consumed by this delivery (see the "sale" ledger
+      // entries above) — flag it so no later cancel can release it again.
+      stockReleased: true,
       paymentStatus: "paid",
       codCollectedAmount: Number(order.totalAmount ?? 0),
       codCollectedBy: uid,
@@ -845,7 +975,7 @@ export const acceptOrder = onCall({ region: REGION, enforceAppCheck: process.env
   if (!uid) {
     throw new HttpsError("unauthenticated", "Sign in first.");
   }
-  checkRateLimit(uid, "acceptOrder");
+  await checkRateLimit(uid, "acceptOrder");
   if (request.auth?.token?.delivery !== true) {
     throw new HttpsError("permission-denied", "Only delivery partners can accept orders.");
   }
@@ -883,6 +1013,7 @@ export const acceptOrder = onCall({ region: REGION, enforceAppCheck: process.env
       return "taken";
     }
 
+    tx.delete(db.collection("orderOffers").doc(orderId));
     tx.update(orderRef, {
       status: "assigned",
       deliveryBoyId: uid,
@@ -900,6 +1031,105 @@ export const acceptOrder = onCall({ region: REGION, enforceAppCheck: process.env
 });
 
 /**
+ * Releases the stock reserved by a cancelled order and writes the "return"
+ * ledger entries. Idempotent: the order is re-read inside the transaction and
+ * `stockReleased` is set atomically with the stock writes. Throws on failure
+ * so callers can record it (see repairStockReleases).
+ */
+async function releaseOrderStock(
+  orderRef: FirebaseFirestore.DocumentReference,
+  orderId: string,
+  orderData: FirebaseFirestore.DocumentData
+): Promise<void> {
+  const itemsList = (orderData.items || []) as { productId: string; quantity: number }[];
+  if (itemsList.length === 0) return;
+  const productRefs = itemsList.map((item) => db.collection("products").doc(item.productId));
+
+  await db.runTransaction(async (tx) => {
+    // Re-read the order inside the tx: a stale snapshot would release the same
+    // reservation twice for a retried / concurrent delivery and eat other
+    // orders' reserved stock.
+    const [orderSnap, ...productSnaps] = await tx.getAll(orderRef, ...productRefs);
+    const fresh = orderSnap.data();
+    if (fresh?.stockReleased || fresh?.status === "delivered") return;
+
+    // cancelledBy carries who actually triggered this release (customer via
+    // cancelOrder, rider via reportDeliveryFailure, system via auto-expire).
+    const cancelActorType = orderData.cancelledBy === "customer"
+      ? "customer"
+      : orderData.cancelledBy === "rider"
+        ? "rider"
+        : orderData.cancelledBy === "admin"
+          ? "admin"
+          : "system";
+    const cancelActorId = orderData.cancelledBy === "rider"
+      ? (orderData.deliveryBoyId || "system")
+      : orderData.cancelledBy === "admin"
+        ? (orderData.cancelledById || "system")
+        : (orderData.customerId || "system");
+
+    for (let i = 0; i < itemsList.length; i++) {
+      const item = itemsList[i];
+      const prodSnap = productSnaps[i];
+      if (!prodSnap.exists) continue;
+      const prod = prodSnap.data() as FirebaseFirestore.DocumentData;
+      const stockVal = Number(prod.stock ?? 0);
+      const phys = Number(prod.physicalStock ?? stockVal);
+      const res = Number(prod.reservedStock ?? 0);
+
+      const newRes = Math.max(0, res - item.quantity);
+      const newAvail = phys - newRes;
+
+      tx.update(prodSnap.ref, {
+        reservedStock: newRes,
+        availableStock: newAvail,
+        stock: newAvail,
+        updatedAt: Timestamp.now(),
+      });
+
+      tx.set(db.collection("inventoryLogs").doc(), {
+        productId: item.productId,
+        adminId: cancelActorId,
+        actorType: cancelActorType,
+        orderId,
+        changeType: "return",
+        physicalDelta: 0,
+        reservedDelta: -item.quantity,
+        notes: `Order #${orderId} cancelled; reservation released.`,
+        timestamp: Timestamp.now(),
+      });
+    }
+    tx.set(orderRef, { stockReleased: true, stockReleaseFailed: FieldValue.delete() }, { merge: true });
+  });
+}
+
+/**
+ * Retries stock releases that failed inside onOrderWritten. Without this a
+ * transient error strands `reservedStock` and makes the product look sold out.
+ */
+export const repairStockReleases = onSchedule(
+  { region: REGION, schedule: "every 15 minutes" },
+  async () => {
+    const flagged = await db.collection("orders")
+      .where("stockReleaseFailed", "==", true)
+      .limit(ESCALATOR_BATCH_LIMIT)
+      .get();
+    for (const doc of flagged.docs) {
+      const order = doc.data();
+      try {
+        if (order.status !== "cancelled" || order.stockReleased) {
+          await doc.ref.update({ stockReleaseFailed: FieldValue.delete() });
+          continue;
+        }
+        await releaseOrderStock(doc.ref, doc.id, order);
+      } catch (e) {
+        console.error(`[STOCK_REPAIR_FAILED] order ${doc.id}:`, e);
+      }
+    }
+  }
+);
+
+/**
  * Automatically updates active order count and completed revenue.
  */
 export const onOrderWritten = onDocumentWritten({ region: REGION, document: "orders/{orderId}" }, async (event) => {
@@ -907,6 +1137,12 @@ export const onOrderWritten = onDocumentWritten({ region: REGION, document: "ord
   const afterData = event.data?.after.data();
 
   const statsRef = db.collection("config").doc("dashboard_stats");
+
+  // Keep the rider-visible, PII-free offer in step with whether the order is
+  // still open for any rider to claim.
+  if (isOpenOffer(beforeData) !== isOpenOffer(afterData)) {
+    await syncOrderOffer(event.params.orderId, afterData);
+  }
 
   // 1. New Order Created (Initial status is 'pending')
   if (!beforeData && afterData) {
@@ -938,82 +1174,28 @@ export const onOrderWritten = onDocumentWritten({ region: REGION, document: "ord
     if (beforeStatus !== afterStatus) {
       // If transition to cancelled: release reserved stock and log return.
       // Guarded by `stockReleased` so a redelivered/retried trigger event
-      // can never double-release the same reservation.
-      if (afterStatus === "cancelled" && beforeStatus !== "cancelled" && !afterData.stockReleased) {
-        const itemsList = (afterData.items || []) as { productId: string; quantity: number }[];
-        if (itemsList.length > 0) {
-          const productRefs = itemsList.map(item => db.collection("products").doc(item.productId));
-          const orderRef = event.data!.after.ref;
-          try {
-            await db.runTransaction(async (tx) => {
-              // Re-read the order inside the tx: the event snapshot's
-              // `stockReleased` is stale for a retried / concurrent trigger
-              // delivery, which would release the same reservation twice and
-              // eat other orders' reserved stock.
-              const [orderSnap, ...productSnaps] = await tx.getAll(orderRef, ...productRefs);
-              if (orderSnap.data()?.stockReleased) return;
-              for (let i = 0; i < itemsList.length; i++) {
-                const item = itemsList[i];
-                const prodSnap = productSnaps[i];
-                if (prodSnap.exists) {
-                  const prod = prodSnap.data() as FirebaseFirestore.DocumentData;
-                  const stockVal = Number(prod.stock ?? 0);
-                  const phys = Number(prod.physicalStock ?? stockVal);
-                  const res = Number(prod.reservedStock ?? 0);
-
-                  const newRes = Math.max(0, res - item.quantity);
-                  const newAvail = phys - newRes;
-
-                  tx.update(prodSnap.ref, {
-                    reservedStock: newRes,
-                    availableStock: newAvail,
-                    stock: newAvail,
-                    updatedAt: Timestamp.now()
-                  });
-
-                  // Write inventory log for the return (cancellation)
-                  const ledgerRef = db.collection("inventoryLogs").doc();
-                  // cancelledBy carries who actually triggered this release
-                  // (customer via cancelOrder, rider via reportDeliveryFailure,
-                  // system via auto-expire) — attribute both the actor id and
-                  // actorType to whoever that really was, instead of always
-                  // blaming the customer or falling back to the DTO's
-                  // "admin" default.
-                  const cancelActorType = afterData.cancelledBy === "customer"
-                    ? "customer"
-                    : afterData.cancelledBy === "rider"
-                      ? "rider"
-                      : afterData.cancelledBy === "admin"
-                        ? "admin"
-                        : "system";
-                  const cancelActorId = afterData.cancelledBy === "rider"
-                    ? (afterData.deliveryBoyId || "system")
-                    : afterData.cancelledBy === "admin"
-                      ? (afterData.cancelledById || "system")
-                      : (afterData.customerId || "system");
-                  tx.set(ledgerRef, {
-                    productId: item.productId,
-                    adminId: cancelActorId,
-                    actorType: cancelActorType,
-                    orderId: event.params.orderId,
-                    changeType: "return",
-                    physicalDelta: 0,
-                    reservedDelta: -item.quantity,
-                    notes: `Order #${event.params.orderId} cancelled; reservation released.`,
-                    timestamp: Timestamp.now()
-                  });
-                }
-              }
-              tx.set(orderRef, { stockReleased: true }, { merge: true });
-            });
-          } catch (err) {
-            console.error(
-              `[STOCK_RELEASE_FAILED] order ${event.params.orderId} was cancelled but its reserved ` +
-              `stock could not be released — reservedStock is likely stranded and needs a manual ` +
-              `inventoryLogs correction.`,
-              err
-            );
-          }
+      // can never double-release the same reservation, and by the delivered
+      // check because a delivery already consumed the reservation.
+      if (
+        afterStatus === "cancelled" &&
+        beforeStatus !== "cancelled" &&
+        beforeStatus !== "delivered" &&
+        !afterData.stockReleased
+      ) {
+        const orderRef = event.data!.after.ref;
+        try {
+          await releaseOrderStock(orderRef, event.params.orderId, afterData);
+        } catch (err) {
+          console.error(
+            `[STOCK_RELEASE_FAILED] order ${event.params.orderId} was cancelled but its reserved ` +
+            `stock could not be released; repairStockReleases will retry.`,
+            err
+          );
+          // Flag the order so the scheduled repair job picks it up. Status is
+          // unchanged, so this write does not re-enter the branch above.
+          await orderRef
+            .set({ stockReleaseFailed: true }, { merge: true })
+            .catch((e) => console.error("Failed to flag stockReleaseFailed:", e));
         }
       }
 
@@ -1133,11 +1315,16 @@ export const onRiderWritten = onDocumentWritten({ region: REGION, document: "del
     try {
       if (afterShouldHaveClaim) {
         await auth.setCustomUserClaims(riderId, { role: "delivery", delivery: true });
+        await auth.updateUser(riderId, { disabled: false });
       } else {
         await auth.setCustomUserClaims(riderId, { role: null, delivery: null });
+        // Claims alone linger until the ID token expires (~1h): disable the
+        // account and revoke refresh tokens so the session actually ends.
+        await auth.updateUser(riderId, { disabled: true });
+        await auth.revokeRefreshTokens(riderId);
       }
     } catch (e) {
-      console.error(`Failed to set custom claims for rider ${riderId}:`, e);
+      console.error(`Failed to sync auth state for rider ${riderId}:`, e);
     }
   }
 });
@@ -1189,11 +1376,14 @@ export const onAdminWritten = onDocumentWritten({ region: REGION, document: "adm
   try {
     if (afterExists) {
       await auth.setCustomUserClaims(adminId, { role: "admin", admin: true });
+      await auth.updateUser(adminId, { disabled: false });
     } else {
       await auth.setCustomUserClaims(adminId, { role: null, admin: null });
+      await auth.updateUser(adminId, { disabled: true });
+      await auth.revokeRefreshTokens(adminId);
     }
   } catch (e) {
-    console.error(`Failed to set custom claims for admin ${adminId}:`, e);
+    console.error(`Failed to sync auth state for admin ${adminId}:`, e);
   }
 });
 
@@ -1206,7 +1396,7 @@ export const createRiderLogin = onCall({ region: REGION, enforceAppCheck: proces
   if (!uid) {
     throw new HttpsError("unauthenticated", "Sign in first.");
   }
-  checkRateLimit(uid, "createRiderLogin");
+  await checkRateLimit(uid, "createRiderLogin");
 
   // Verify that the caller is an active admin
   const adminSnap = await db.collection("admins").doc(uid).get();
@@ -1244,25 +1434,34 @@ export const createRiderLogin = onCall({ region: REGION, enforceAppCheck: proces
 
   const riderUid = userRecord.uid;
 
-  // Create document in deliveryBoys with document ID = riderUid
-  const now = Timestamp.now();
-  await db.collection("deliveryBoys").doc(riderUid).set({
-    uid: riderUid,
-    name,
-    email,
-    phone,
-    village,
-    role: "delivery",
-    isActive: true,
-    onDuty: true,
-    vehicleNo,
-    licenseNo,
-    createdAt: now,
-    updatedAt: now,
-  });
+  try {
+    // Create document in deliveryBoys with document ID = riderUid
+    const now = Timestamp.now();
+    await db.collection("deliveryBoys").doc(riderUid).set({
+      uid: riderUid,
+      name,
+      email,
+      phone,
+      village,
+      role: "delivery",
+      isActive: true,
+      onDuty: true,
+      vehicleNo,
+      licenseNo,
+      createdAt: now,
+      updatedAt: now,
+    });
 
-  // Set custom claims (redundant but safe)
-  await auth.setCustomUserClaims(riderUid, { role: "delivery", delivery: true });
+    // Set custom claims (redundant but safe)
+    await auth.setCustomUserClaims(riderUid, { role: "delivery", delivery: true });
+  } catch (error) {
+    // Don't leave an Auth account with no rider doc behind: the admin would
+    // retry and hit "email already exists" with no way to recover.
+    console.error(`[RIDER_CREATE_FAILED] rolling back Auth user ${riderUid}:`, error);
+    await db.collection("deliveryBoys").doc(riderUid).delete().catch(() => undefined);
+    await auth.deleteUser(riderUid).catch(() => undefined);
+    throw new HttpsError("internal", "Failed to create the rider. Please try again.");
+  }
 
   return { success: true, uid: riderUid, temporaryPassword: password };
 });
@@ -1279,7 +1478,7 @@ export const getCloudinarySignature = onCall(
   if (!uid) {
     throw new HttpsError("unauthenticated", "Sign in first.");
   }
-  checkRateLimit(uid, "getCloudinarySignature");
+  await checkRateLimit(uid, "getCloudinarySignature");
 
   const adminSnap = await db.collection("admins").doc(uid).get();
     if (!adminSnap.exists || adminSnap.data()?.isActive === false) {
@@ -1353,7 +1552,7 @@ export const escalateStaleOrders = onSchedule(
       await sendPushToTokens(
         tokens,
         "Delivery still needed nearby",
-        `Order from ${order.customerName ?? "a customer"} in ${order.village ?? ""} is still waiting for a rider.`,
+        `Order from ${firstName(order.customerName)} in ${order.village ?? ""} is still waiting for a rider.`,
         { orderId: doc.id, type: "new_order_offer" },
         tokenOwners
       );
@@ -1429,7 +1628,7 @@ export const deleteAccount = onCall(
     if (!uid) {
       throw new HttpsError("unauthenticated", "Sign in to delete your account.");
     }
-    checkRateLimit(uid, "deleteAccount");
+    await checkRateLimit(uid, "deleteAccount");
 
     // Rider and admin logins are provisioned and removed by an administrator.
     // Letting one delete its own auth user would strand its deliveryBoys /

@@ -6,16 +6,24 @@ class PlaceOrderResult {
   final bool isSuccess;
   final String? orderId;
   final String? otp;
+
+  /// Server-computed grand total (subtotal + delivery fee). The client's own
+  /// cart total is only a preview; show this one once the order exists.
+  final double? totalAmount;
   final String? errorMessage;
 
-  const PlaceOrderResult.success({required this.orderId, required this.otp})
-      : isSuccess = true,
+  const PlaceOrderResult.success({
+    required this.orderId,
+    required this.otp,
+    this.totalAmount,
+  })  : isSuccess = true,
         errorMessage = null;
 
   const PlaceOrderResult.failure(this.errorMessage)
       : isSuccess = false,
         orderId = null,
-        otp = null;
+        otp = null,
+        totalAmount = null;
 }
 
 abstract class OrderRepository {
@@ -30,17 +38,23 @@ abstract class OrderRepository {
   /// Blinkit-style broadcast feed: pending orders not yet claimed by any
   /// rider. Any on-duty rider may stream and accept from this — visibility
   /// isn't restricted to their village (see firestore.rules), only the
-  /// push-notification priority is.
+  /// push-notification priority is. Backed by the PII-free /orderOffers copy:
+  /// the returned orders carry a first name and village but no phone, street
+  /// address or GPS pin. The full order is readable only after acceptOrder.
   Stream<List<Order>> streamIncomingOffers({int limit = 30});
 
   /// Places an order through the placeOrder Cloud Function. The server
   /// re-prices items, checks stock, and generates the delivery OTP.
+  ///
+  /// [requestId] makes the call idempotent: retrying with the same id after a
+  /// lost response returns the order that was already created.
   Future<PlaceOrderResult> placeOrder({
     required List<OrderItem> items,
     required String deliveryAddress,
     String? deliveryInstructions,
     double? latitude,
     double? longitude,
+    String? requestId,
   });
 
   /// Cancels a customer order while in 'pending' or 'assigned' state.

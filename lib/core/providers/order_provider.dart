@@ -141,6 +141,7 @@ class OrderProvider with ChangeNotifier {
     String? deliveryInstructions,
     double? latitude,
     double? longitude,
+    String? requestId,
   }) async {
     _isLoading = true;
     _errorMessage = null;
@@ -152,6 +153,7 @@ class OrderProvider with ChangeNotifier {
       deliveryInstructions: deliveryInstructions,
       latitude: latitude,
       longitude: longitude,
+      requestId: requestId,
     );
 
     _isLoading = false;

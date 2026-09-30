@@ -1,5 +1,5 @@
 import functionsTest from "firebase-functions-test";
-import { onOrderWritten } from "../src/index";
+import { onOrderWritten, repairStockReleases } from "../src/index";
 import { getFirestore } from "firebase-admin/firestore";
 import { clearFirestore, PROJECT_ID } from "./testUtils";
 
@@ -35,6 +35,134 @@ describe("onOrderWritten", () => {
 
   afterAll(async () => {
     await test.cleanup();
+  });
+
+  describe("rider offers (PII-free)", () => {
+    const fullOrder = {
+      status: "pending",
+      deliveryBoyId: null,
+      customerId: "cust1",
+      customerName: "Asha Kumari",
+      customerPhone: "9876543210",
+      deliveryAddress: "12 Main Street",
+      latitude: 16.546,
+      longitude: 81.5225,
+      village: "Bhimavaram",
+      items: [{ productId: "prod1", name: "Milk", price: 50, quantity: 2 }],
+      subtotal: 100,
+      deliveryFee: 30,
+      totalAmount: 130,
+      paymentMethod: "COD",
+    };
+
+    it("publishes an offer with no phone, street address or GPS pin when an order opens", async () => {
+      await fireOrderWritten("order1", undefined, fullOrder);
+
+      const offer = (await db.collection("orderOffers").doc("order1").get()).data();
+      expect(offer).toBeDefined();
+      expect(offer?.customerName).toBe("Asha");
+      expect(offer?.village).toBe("Bhimavaram");
+      expect(offer?.totalAmount).toBe(130);
+      expect(offer?.items).toHaveLength(1);
+      for (const leaked of ["customerPhone", "latitude", "longitude", "customerId"]) {
+        expect(offer?.[leaked]).toBeUndefined();
+      }
+      expect(offer?.deliveryAddress).toBe("");
+    });
+
+    it("removes the offer once a rider accepts the order", async () => {
+      await fireOrderWritten("order1", undefined, fullOrder);
+      await fireOrderWritten("order1", fullOrder, {
+        ...fullOrder,
+        status: "assigned",
+        deliveryBoyId: "rider1",
+      });
+      expect((await db.collection("orderOffers").doc("order1").get()).exists).toBe(false);
+    });
+
+    it("removes the offer when the order is cancelled", async () => {
+      await fireOrderWritten("order1", undefined, fullOrder);
+      await fireOrderWritten("order1", fullOrder, { ...fullOrder, status: "cancelled" });
+      expect((await db.collection("orderOffers").doc("order1").get()).exists).toBe(false);
+    });
+
+    it("re-publishes the offer when an admin hands an assigned order back to the pool", async () => {
+      const assigned = { ...fullOrder, status: "assigned", deliveryBoyId: "rider1" };
+      await fireOrderWritten("order1", assigned, { ...fullOrder, status: "pending", deliveryBoyId: null });
+      expect((await db.collection("orderOffers").doc("order1").get()).exists).toBe(true);
+    });
+  });
+
+  it("does not release stock when a delivered order is (wrongly) moved to cancelled", async () => {
+    await db.collection("products").doc("prod1").set({
+      physicalStock: 8,
+      reservedStock: 2, // belongs to a different, still-open order
+      availableStock: 6,
+    });
+
+    await fireOrderWritten(
+      "order1",
+      { status: "delivered", totalAmount: 100, items: [{ productId: "prod1", quantity: 2 }] },
+      { status: "cancelled", totalAmount: 100, items: [{ productId: "prod1", quantity: 2 }] }
+    );
+
+    const productSnap = await db.collection("products").doc("prod1").get();
+    expect(productSnap.data()?.reservedStock).toBe(2);
+    const ledgerSnap = await db.collection("inventoryLogs").where("orderId", "==", "order1").get();
+    expect(ledgerSnap.size).toBe(0);
+  });
+
+  describe("repairStockReleases", () => {
+    it("releases the reservation of a cancelled order whose release previously failed", async () => {
+      await db.collection("products").doc("prod1").set({
+        physicalStock: 10,
+        reservedStock: 3,
+        availableStock: 7,
+      });
+      await db.collection("orders").doc("order1").set({
+        status: "cancelled",
+        cancelledBy: "customer",
+        customerId: "cust1",
+        stockReleaseFailed: true,
+        items: [{ productId: "prod1", quantity: 3 }],
+      });
+
+      await repairStockReleases.run({} as never);
+
+      const productSnap = await db.collection("products").doc("prod1").get();
+      expect(productSnap.data()?.reservedStock).toBe(0);
+      expect(productSnap.data()?.availableStock).toBe(10);
+      const orderSnap = await db.collection("orders").doc("order1").get();
+      expect(orderSnap.data()?.stockReleased).toBe(true);
+      expect(orderSnap.data()?.stockReleaseFailed).toBeUndefined();
+
+      // A second run must not release again.
+      await repairStockReleases.run({} as never);
+      const again = await db.collection("products").doc("prod1").get();
+      expect(again.data()?.reservedStock).toBe(0);
+      expect(again.data()?.availableStock).toBe(10);
+    });
+
+    it("clears the flag without touching stock when the order was already released", async () => {
+      await db.collection("products").doc("prod1").set({
+        physicalStock: 10,
+        reservedStock: 1,
+        availableStock: 9,
+      });
+      await db.collection("orders").doc("order1").set({
+        status: "cancelled",
+        stockReleased: true,
+        stockReleaseFailed: true,
+        items: [{ productId: "prod1", quantity: 3 }],
+      });
+
+      await repairStockReleases.run({} as never);
+
+      const productSnap = await db.collection("products").doc("prod1").get();
+      expect(productSnap.data()?.reservedStock).toBe(1);
+      const orderSnap = await db.collection("orders").doc("order1").get();
+      expect(orderSnap.data()?.stockReleaseFailed).toBeUndefined();
+    });
   });
 
   it("increments activeOrdersCount when a new order is created", async () => {

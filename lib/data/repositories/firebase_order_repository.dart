@@ -66,10 +66,11 @@ class FirebaseOrderRepository implements OrderRepository {
 
   @override
   Stream<List<Order>> streamIncomingOffers({int limit = 30}) {
+    // Riders may not read the full order until they accept it (it holds the
+    // customer's phone, address and GPS pin). /orderOffers is the PII-free
+    // copy the onOrderWritten trigger keeps for every unclaimed order.
     return _db
-        .collection('orders')
-        .where('status', isEqualTo: 'pending')
-        .where('deliveryBoyId', isEqualTo: null)
+        .collection('orderOffers')
         .orderBy('createdAt', descending: true)
         .limit(limit)
         .snapshots()
@@ -98,6 +99,7 @@ class FirebaseOrderRepository implements OrderRepository {
     String? deliveryInstructions,
     double? latitude,
     double? longitude,
+    String? requestId,
   }) async {
     try {
       final callable = _functions.httpsCallable('placeOrder');
@@ -113,11 +115,13 @@ class FirebaseOrderRepository implements OrderRepository {
           'deliveryInstructions': deliveryInstructions,
         if (latitude != null) 'latitude': latitude,
         if (longitude != null) 'longitude': longitude,
+        if (requestId != null && requestId.isNotEmpty) 'requestId': requestId,
       });
       final data = Map<String, dynamic>.from(response.data as Map);
       return PlaceOrderResult.success(
         orderId: data['orderId'] as String?,
         otp: data['otp'] as String?,
+        totalAmount: (data['totalAmount'] as num?)?.toDouble(),
       );
     } on FirebaseFunctionsException catch (e) {
       return PlaceOrderResult.failure(
@@ -139,8 +143,8 @@ class FirebaseOrderRepository implements OrderRepository {
       return null;
     } on FirebaseFunctionsException catch (e) {
       return e.message ?? 'Failed to cancel order (${e.code}). Please try again.';
-    } catch (e) {
-      return 'Failed to cancel order ($e). Check your connection and try again.';
+    } catch (_) {
+      return 'Failed to cancel order. Check your connection and try again.';
     }
   }
 

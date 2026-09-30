@@ -11,6 +11,7 @@ class PlaceOrderUseCase {
     String? deliveryInstructions,
     double? latitude,
     double? longitude,
+    String? requestId,
   }) =>
       repository.placeOrder(
         items: items,
@@ -18,5 +19,6 @@ class PlaceOrderUseCase {
         deliveryInstructions: deliveryInstructions,
         latitude: latitude,
         longitude: longitude,
+        requestId: requestId,
       );
 }

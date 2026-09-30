@@ -1,3 +1,5 @@
+import 'dart:math' as math;
+
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../../../core/design/app_tokens.dart';
@@ -30,6 +32,17 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
   double? _pickedLat;
   double? _pickedLng;
   bool _isSubmitting = false;
+
+  /// One id per checkout attempt, reused on retries: if the first request
+  /// succeeded but its response was lost, the server hands back that order
+  /// instead of rejecting the retry as a second active order.
+  final String _requestId = _newRequestId();
+
+  static String _newRequestId() {
+    final rand = math.Random.secure();
+    final suffix = List.generate(8, (_) => rand.nextInt(16).toRadixString(16)).join();
+    return '${DateTime.now().microsecondsSinceEpoch.toRadixString(36)}$suffix';
+  }
 
   static const double _fallbackDeliveryFee = 30.0;
   static const double _fallbackFreeDeliveryAbove = 300.0;
@@ -172,6 +185,7 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
       deliveryInstructions: instructions.isEmpty ? null : instructions,
       latitude: latitude,
       longitude: longitude,
+      requestId: _requestId,
     );
 
     if (!mounted) return;
@@ -183,7 +197,8 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
       Navigator.pushReplacementNamed(
         context,
         RouteGenerator.orderSuccess,
-        arguments: (orderId: result.orderId!, total: grandTotal),
+        // Prefer the server's total: it is what the customer will actually pay.
+        arguments: (orderId: result.orderId!, total: result.totalAmount ?? grandTotal),
       );
     } else {
       _showSnackBar(orderProvider.errorMessage ?? 'Order placement failed. Please try again.');

@@ -413,7 +413,10 @@ class _DeliveryHomeScreenState extends State<DeliveryHomeScreen> {
                       ),
                       const SizedBox(height: 2),
                       Text(
-                        '${order.deliveryAddress}, ${order.village}',
+                        // Offers carry the village only (no street address).
+                        [order.deliveryAddress, order.village]
+                            .where((part) => part.trim().isNotEmpty)
+                            .join(', '),
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
                         style: TextStyle(fontSize: 11.5, color: scheme.onSurfaceVariant),
