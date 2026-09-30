@@ -9,7 +9,7 @@
     "test": "test"
   },
   "scripts": {
-    "build:web": "flutter build web --dart-define=USE_FIREBASE_EMULATOR=true",
+    "build:web": "flutter build web",
     "emulators": "firebase emulators:start --only auth,firestore,functions",
     "seed": "node scripts/seed.js",
     "test:e2e": "playwright test",

@@ -24,7 +24,19 @@ import '../../../core/utils/app_exception.dart';
 
 class OrderTrackingScreen extends StatelessWidget {
   final String orderId;
-  const OrderTrackingScreen({super.key, required this.orderId});
+  final bool isEmbeddedInTab;
+  final List<Order>? activeOrders;
+  final ValueChanged<String>? onSelectOrder;
+  final VoidCallback? onViewAllOrders;
+
+  const OrderTrackingScreen({
+    super.key,
+    required this.orderId,
+    this.isEmbeddedInTab = false,
+    this.activeOrders,
+    this.onSelectOrder,
+    this.onViewAllOrders,
+  });
 
   int _getStatusStep(String status) {
     switch (status) {
@@ -68,8 +80,54 @@ class OrderTrackingScreen extends StatelessWidget {
 
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Track Order'),
+        automaticallyImplyLeading: !isEmbeddedInTab,
+        title: isEmbeddedInTab
+            ? Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const Text('Live Tracking',
+                      style: TextStyle(fontWeight: FontWeight.w800)),
+                  const SizedBox(width: 8),
+                  Container(
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
+                    decoration: BoxDecoration(
+                      color: AppTokens.statusDelivered,
+                      borderRadius: BorderRadius.circular(AppTokens.rPill),
+                    ),
+                    child: const Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        CircleAvatar(
+                          radius: 3,
+                          backgroundColor: Colors.white,
+                        ),
+                        SizedBox(width: 4),
+                        Text(
+                          'LIVE',
+                          style: TextStyle(
+                            color: Colors.white,
+                            fontSize: 10,
+                            fontWeight: FontWeight.w800,
+                            letterSpacing: 0.5,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              )
+            : const Text('Track Order'),
         actions: [
+          if (isEmbeddedInTab && onViewAllOrders != null)
+            TextButton.icon(
+              onPressed: onViewAllOrders,
+              icon: const Icon(Icons.receipt_long_rounded, size: 18),
+              label: const Text(
+                'All Orders',
+                style: TextStyle(fontWeight: FontWeight.w700),
+              ),
+            ),
           IconButton(
             icon: const Icon(Icons.support_agent_rounded),
             tooltip: 'Get Help for this Order',
@@ -112,6 +170,34 @@ class OrderTrackingScreen extends StatelessWidget {
           return ListView(
             padding: const EdgeInsets.all(AppTokens.s20),
             children: [
+              if (activeOrders != null && activeOrders!.length > 1) ...[
+                SizedBox(
+                  height: 38,
+                  child: ListView.separated(
+                    scrollDirection: Axis.horizontal,
+                    itemCount: activeOrders!.length,
+                    separatorBuilder: (_, __) => const SizedBox(width: 8),
+                    itemBuilder: (context, index) {
+                      final item = activeOrders![index];
+                      final isSelected = item.id == orderId;
+                      return ChoiceChip(
+                        selected: isSelected,
+                        label: Text(
+                          'Order #${item.id.substring(0, 6).toUpperCase()}',
+                          style: TextStyle(
+                            fontSize: 12,
+                            fontWeight: isSelected ? FontWeight.w800 : FontWeight.w600,
+                          ),
+                        ),
+                        onSelected: (selected) {
+                          if (selected) onSelectOrder?.call(item.id);
+                        },
+                      );
+                    },
+                  ),
+                ),
+                const SizedBox(height: AppTokens.s12),
+              ],
               // Header
               Card(
                 child: Padding(
@@ -485,6 +571,7 @@ class OrderTrackingScreen extends StatelessWidget {
                 ),
               ),
               const SizedBox(height: AppTokens.s32),
+              if (isEmbeddedInTab) const SizedBox(height: 100),
             ],
           );
         },

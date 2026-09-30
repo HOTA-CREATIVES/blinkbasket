@@ -71,6 +71,7 @@ class AuthProvider extends ChangeNotifier {
   bool get isLoading => _isLoading;
   String? get errorMessage => _errorMessage;
   bool get isAuthenticated => _status == AuthStatus.authenticated;
+  bool get hasActiveSession => _currentUserModel != null || _authRepository.currentUser != null;
 
   void updateCurrentUserModel(UserModel updatedUser) {
     _currentUserModel = updatedUser;
@@ -381,18 +382,53 @@ class AuthProvider extends ChangeNotifier {
 
   Future<void> reloadUserProfile() async {
     final user = _authRepository.currentUser;
-    final role = _currentUserModel?.role;
-    if (user != null && role != null) {
-      final model = await _authRepository.refreshUserProfile(user.uid, role);
-      if (model != null) {
-        if (!model.isActive) {
-          await logout();
-          return;
-        }
-        _currentUserModel = model;
-        notifyListeners();
+    if (user == null) return;
+    final role = _currentUserModel?.role ?? 'customer';
+    final model = await _authRepository.refreshUserProfile(user.uid, role);
+    if (model != null) {
+      if (!model.isActive) {
+        await logout();
+        return;
       }
+      _currentUserModel = model;
+      notifyListeners();
     }
+  }
+
+  /// Ensures an authenticated user model is present if a Firebase session exists.
+  /// Resolves the user profile or falls back to an active customer stub so
+  /// checkout and other authorized flows are never blocked by a profile stream glitch.
+  Future<UserModel?> ensureCurrentUserModel() async {
+    if (_currentUserModel != null) return _currentUserModel;
+    final user = _authRepository.currentUser;
+    if (user == null) return null;
+
+    try {
+      await _discoverRoleAndInitialize(user);
+      if (_currentUserModel != null) return _currentUserModel;
+    } catch (e) {
+      debugPrint('ensureCurrentUserModel error: $e');
+    }
+
+    final fallback = UserModel(
+      uid: user.uid,
+      docId: user.uid,
+      name: user.displayName ?? '',
+      email: user.email ?? '',
+      phone: user.phoneNumber ?? '',
+      avatarUrl: user.photoURL,
+      village: '',
+      role: 'customer',
+      isActive: true,
+      onboardingCompleted: true,
+      onboardingStep: 3,
+      createdAt: DateTime.now(),
+      updatedAt: DateTime.now(),
+    );
+    _currentUserModel = fallback;
+    _status = AuthStatus.authenticated;
+    notifyListeners();
+    return fallback;
   }
 
   Future<void> _onAuthStateChanged(User? user,

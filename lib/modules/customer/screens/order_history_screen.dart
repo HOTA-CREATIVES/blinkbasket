@@ -21,8 +21,15 @@ class OrderHistoryScreen extends StatelessWidget {
   /// What "Browse Products" does from the empty state. Inside the home tabs it
   /// switches to the Store tab; as a pushed route it defaults to going back.
   final VoidCallback? onBrowse;
+  final void Function(Order)? onOrderTap;
+  final bool hideAppBar;
 
-  const OrderHistoryScreen({super.key, this.onBrowse});
+  const OrderHistoryScreen({
+    super.key,
+    this.onBrowse,
+    this.onOrderTap,
+    this.hideAppBar = false,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -34,7 +41,7 @@ class OrderHistoryScreen extends StatelessWidget {
     final scheme = Theme.of(context).colorScheme;
 
     return Scaffold(
-      appBar: AppBar(title: const Text('My Orders')),
+      appBar: hideAppBar ? null : AppBar(title: const Text('My Orders')),
       body: user == null
           ? const EmptyState(
               icon: Icons.person_off_outlined,
@@ -77,7 +84,12 @@ class OrderHistoryScreen extends StatelessWidget {
                 ];
 
                 return ListView.separated(
-                  padding: const EdgeInsets.all(AppTokens.s16),
+                  padding: EdgeInsets.fromLTRB(
+                    AppTokens.s16,
+                    AppTokens.s16,
+                    AppTokens.s16,
+                    hideAppBar ? 100 : AppTokens.s16,
+                  ),
                   itemCount: rows.length,
                   separatorBuilder: (_, __) =>
                       const SizedBox(height: AppTokens.s12),
@@ -99,11 +111,15 @@ class OrderHistoryScreen extends StatelessWidget {
                       clipBehavior: Clip.antiAlias,
                       child: InkWell(
                         onTap: () {
-                          Navigator.pushNamed(
-                            context,
-                            RouteGenerator.orderTracking,
-                            arguments: order.id,
-                          );
+                          if (onOrderTap != null) {
+                            onOrderTap!(order);
+                          } else {
+                            Navigator.pushNamed(
+                              context,
+                              RouteGenerator.orderTracking,
+                              arguments: order.id,
+                            );
+                          }
                         },
                         child: Padding(
                           padding: const EdgeInsets.all(AppTokens.s16),

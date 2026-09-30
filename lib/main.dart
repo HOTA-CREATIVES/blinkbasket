@@ -8,7 +8,6 @@ import 'package:firebase_analytics/firebase_analytics.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:provider/provider.dart';
-import 'core/config/emulator_config.dart';
 import 'core/providers/auth_provider.dart';
 import 'core/providers/banner_provider.dart';
 import 'core/providers/cart_provider.dart';
@@ -38,23 +37,24 @@ void main() async {
       await Firebase.initializeApp(
         options: DefaultFirebaseOptions.currentPlatform,
       );
-      await EmulatorConfig.configureEmulators();
 
       if (!kIsWeb) {
         FlutterError.onError = FirebaseCrashlytics.instance.recordFlutterFatalError;
       }
 
-      if (!EmulatorConfig.useEmulator) {
+      try {
         await FirebaseAppCheck.instance.activate(
           androidProvider:
               kDebugMode ? AndroidProvider.debug : AndroidProvider.playIntegrity,
           appleProvider:
               kDebugMode ? AppleProvider.debug : AppleProvider.appAttest,
         );
-        FirebaseFirestore.instance.settings = const Settings(
-          persistenceEnabled: true,
-        );
+      } catch (e) {
+        debugPrint('AppCheck activation skipped or not provisioned: $e');
       }
+      FirebaseFirestore.instance.settings = const Settings(
+        persistenceEnabled: true,
+      );
 
       await FirebaseAnalytics.instance.logAppOpen();
 

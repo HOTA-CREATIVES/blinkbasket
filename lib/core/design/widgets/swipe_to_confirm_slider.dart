@@ -128,25 +128,30 @@ class _SwipeToConfirmSliderState extends State<SwipeToConfirmSlider>
                     children: [
                       // Center Label Text
                       Center(
-                        child: ShaderMask(
-                          shaderCallback: (bounds) {
-                            return LinearGradient(
-                              colors: [
-                                widget.color.withValues(alpha: 0.6),
-                                widget.color,
-                                widget.color.withValues(alpha: 0.6),
-                              ],
-                              stops: const [0.0, 0.5, 1.0],
-                            ).createShader(bounds);
-                          },
-                          child: Text(
-                            widget.text,
-                            textAlign: TextAlign.center,
-                            style: const TextStyle(
-                              fontSize: 13,
-                              fontWeight: FontWeight.w800,
-                              color: Colors.white,
-                              letterSpacing: 1.2,
+                        child: Padding(
+                          padding: const EdgeInsets.symmetric(horizontal: 50.0),
+                          child: ShaderMask(
+                            shaderCallback: (bounds) {
+                              return LinearGradient(
+                                colors: [
+                                  widget.color.withValues(alpha: 0.6),
+                                  widget.color,
+                                  widget.color.withValues(alpha: 0.6),
+                                ],
+                                stops: const [0.0, 0.5, 1.0],
+                              ).createShader(bounds);
+                            },
+                            child: Text(
+                              widget.text,
+                              textAlign: TextAlign.center,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: const TextStyle(
+                                fontSize: 13,
+                                fontWeight: FontWeight.w800,
+                                color: Colors.white,
+                                letterSpacing: 1.0,
+                              ),
                             ),
                           ),
                         ),

@@ -122,7 +122,10 @@ class _RiderMapScreenState extends State<RiderMapScreen> {
                 children: [
                   TileLayer(
                     urlTemplate: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
-                    userAgentPackageName: 'com.example.hypermart',
+                    fallbackUrl: 'https://{s}.tile.openstreetmap.fr/hot/{z}/{x}/{y}.png',
+                    subdomains: const ['a', 'b', 'c'],
+                    userAgentPackageName: 'com.jcmart.app',
+                    maxZoom: 19,
                   ),
                   MarkerLayer(markers: markers),
                 ],

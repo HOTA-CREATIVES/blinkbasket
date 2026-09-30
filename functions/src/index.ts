@@ -1,3 +1,4 @@
+import { setGlobalOptions } from "firebase-functions/v2";
 import { onCall, HttpsError } from "firebase-functions/v2/https";
 import { onDocumentWritten } from "firebase-functions/v2/firestore";
 import { onSchedule } from "firebase-functions/v2/scheduler";
@@ -18,6 +19,20 @@ const CLOUDINARY_UPLOAD_FOLDER = "products";
 
 // Mumbai region — closest to the Bhimavaram service area.
 const REGION = "asia-south1";
+
+// Ensure all HTTPS functions allow public (unauthenticated) ingress at the Cloud Run IAM level.
+// Firebase Auth tokens are validated within the functions themselves.
+setGlobalOptions({
+  region: REGION,
+  invoker: "public",
+  cpu: 0.5,
+  maxInstances: 5,
+});
+
+// App Check is only enforced when explicitly configured via ENFORCE_APP_CHECK=true.
+// In projects where the App Check API is not yet provisioned, enforcing it causes
+// all callables to fail with UNAUTHENTICATED.
+const ENFORCE_APP_CHECK = process.env.ENFORCE_APP_CHECK === "true";
 
 const MAX_ITEMS_PER_ORDER = 50;
 const MAX_QTY_PER_ITEM = 99;
@@ -459,7 +474,7 @@ async function broadcastNewOrder(orderId: string, order: FirebaseFirestore.Docum
  * The 4-digit delivery OTP is written to orders/{id}/private/delivery,
  * which security rules expose to the ordering customer only.
  */
-export const placeOrder = onCall({ region: REGION, enforceAppCheck: process.env.FUNCTIONS_EMULATOR !== "true" }, async (request) => {
+export const placeOrder = onCall({ region: REGION, invoker: "public", enforceAppCheck: ENFORCE_APP_CHECK }, async (request) => {
   const uid = request.auth?.uid;
   if (!uid) {
     throw new HttpsError("unauthenticated", "Sign in to place an order.");
@@ -761,7 +776,7 @@ export const placeOrder = onCall({ region: REGION, enforceAppCheck: process.env.
  * Stock release is handled by the onOrderWritten trigger (same path as
  * expireStaleOrders) to avoid double-release bugs.
  */
-export const cancelOrder = onCall({ region: REGION, enforceAppCheck: process.env.FUNCTIONS_EMULATOR !== "true" }, async (request) => {
+export const cancelOrder = onCall({ region: REGION, invoker: "public", enforceAppCheck: ENFORCE_APP_CHECK }, async (request) => {
   const uid = request.auth?.uid;
   if (!uid) {
     throw new HttpsError("unauthenticated", "Sign in to cancel an order.");
@@ -841,7 +856,7 @@ const DELIVERY_FAILURE_REASONS = [
  * Stock release + ledger entry is handled by the existing onOrderWritten
  * cancellation branch, same as cancelOrder/expireStaleOrders.
  */
-export const reportDeliveryFailure = onCall({ region: REGION, enforceAppCheck: process.env.FUNCTIONS_EMULATOR !== "true" }, async (request) => {
+export const reportDeliveryFailure = onCall({ region: REGION, invoker: "public", enforceAppCheck: ENFORCE_APP_CHECK }, async (request) => {
   const uid = request.auth?.uid;
   if (!uid) {
     throw new HttpsError("unauthenticated", "Sign in first.");
@@ -895,7 +910,7 @@ export const reportDeliveryFailure = onCall({ region: REGION, enforceAppCheck: p
  * Callable only by the rider the order is assigned to, only while the
  * order is out for delivery, with a capped number of attempts.
  */
-export const verifyDeliveryOtp = onCall({ region: REGION, enforceAppCheck: process.env.FUNCTIONS_EMULATOR !== "true" }, async (request) => {
+export const verifyDeliveryOtp = onCall({ region: REGION, invoker: "public", enforceAppCheck: ENFORCE_APP_CHECK }, async (request) => {
   const uid = request.auth?.uid;
   if (!uid) {
     throw new HttpsError("unauthenticated", "Sign in first.");
@@ -1117,7 +1132,7 @@ export const verifyDeliveryOtp = onCall({ region: REGION, enforceAppCheck: proce
  * MAX_OTP_ATTEMPTS cap: resets the attempt counter so the rider can retry
  * (or the admin can walk the customer through re-reading the OTP).
  */
-export const resetOtpAttempts = onCall({ region: REGION, enforceAppCheck: process.env.FUNCTIONS_EMULATOR !== "true" }, async (request) => {
+export const resetOtpAttempts = onCall({ region: REGION, invoker: "public", enforceAppCheck: ENFORCE_APP_CHECK }, async (request) => {
   const uid = request.auth?.uid;
   if (!uid) {
     throw new HttpsError("unauthenticated", "Sign in first.");
@@ -1162,7 +1177,7 @@ export const resetOtpAttempts = onCall({ region: REGION, enforceAppCheck: proces
  * onOrderWritten's notifyOnStatusChange (below) already handles for both
  * the customer and rider push, plus the dashboard stats delta.
  */
-export const acceptOrder = onCall({ region: REGION, enforceAppCheck: process.env.FUNCTIONS_EMULATOR !== "true" }, async (request) => {
+export const acceptOrder = onCall({ region: REGION, invoker: "public", enforceAppCheck: ENFORCE_APP_CHECK }, async (request) => {
   const uid = request.auth?.uid;
   if (!uid) {
     throw new HttpsError("unauthenticated", "Sign in first.");
@@ -1251,7 +1266,7 @@ export const acceptOrder = onCall({ region: REGION, enforceAppCheck: process.env
  * while remaining available to every other rider. Purely a per-rider hide: it
  * never touches the order, so it can't affect who else may accept it.
  */
-export const rejectOrderOffer = onCall({ region: REGION, enforceAppCheck: process.env.FUNCTIONS_EMULATOR !== "true" }, async (request) => {
+export const rejectOrderOffer = onCall({ region: REGION, invoker: "public", enforceAppCheck: ENFORCE_APP_CHECK }, async (request) => {
   const uid = request.auth?.uid;
   if (!uid) {
     throw new HttpsError("unauthenticated", "Sign in first.");
@@ -1290,7 +1305,7 @@ export const rejectOrderOffer = onCall({ region: REGION, enforceAppCheck: proces
  * Going out for delivery also starts the delivery code's validity window.
  * 'delivered' remains verifyDeliveryOtp's alone.
  */
-export const advanceOrderStatus = onCall({ region: REGION, enforceAppCheck: process.env.FUNCTIONS_EMULATOR !== "true" }, async (request) => {
+export const advanceOrderStatus = onCall({ region: REGION, invoker: "public", enforceAppCheck: ENFORCE_APP_CHECK }, async (request) => {
   const uid = request.auth?.uid;
   if (!uid) {
     throw new HttpsError("unauthenticated", "Sign in first.");
@@ -1368,7 +1383,7 @@ export const advanceOrderStatus = onCall({ region: REGION, enforceAppCheck: proc
  * shared by mistake or has expired. Resets the failed-attempt counters and, if
  * the order is already out for delivery, restarts the validity window.
  */
-export const regenerateDeliveryOtp = onCall({ region: REGION, enforceAppCheck: process.env.FUNCTIONS_EMULATOR !== "true" }, async (request) => {
+export const regenerateDeliveryOtp = onCall({ region: REGION, invoker: "public", enforceAppCheck: ENFORCE_APP_CHECK }, async (request) => {
   const uid = request.auth?.uid;
   if (!uid) {
     throw new HttpsError("unauthenticated", "Sign in first.");
@@ -1792,7 +1807,7 @@ export const onAdminWritten = onDocumentWritten({ region: REGION, document: "adm
  * Creates a rider auth user login and registers them in deliveryBoys collection.
  * Only callable by authenticated admins.
  */
-export const createRiderLogin = onCall({ region: REGION, enforceAppCheck: process.env.FUNCTIONS_EMULATOR !== "true" }, async (request) => {
+export const createRiderLogin = onCall({ region: REGION, invoker: "public", enforceAppCheck: ENFORCE_APP_CHECK }, async (request) => {
   const uid = request.auth?.uid;
   if (!uid) {
     throw new HttpsError("unauthenticated", "Sign in first.");
@@ -1920,7 +1935,7 @@ function writeGeocodeCache(key: string, value: unknown): Promise<unknown> {
 
 /** Address details for a pinned point, to pre-fill the address form. Best
  * effort: the client treats any failure as "fill it in yourself". */
-export const reverseGeocode = onCall({ region: REGION, enforceAppCheck: process.env.FUNCTIONS_EMULATOR !== "true" }, async (request) => {
+export const reverseGeocode = onCall({ region: REGION, invoker: "public", enforceAppCheck: ENFORCE_APP_CHECK }, async (request) => {
   const uid = request.auth?.uid;
   if (!uid) {
     throw new HttpsError("unauthenticated", "Sign in first.");
@@ -1966,7 +1981,7 @@ export const reverseGeocode = onCall({ region: REGION, enforceAppCheck: process.
 
 /** Address / landmark search inside the delivery area, so a customer who can't
  * (or won't) use GPS can still find their house. */
-export const searchAddress = onCall({ region: REGION, enforceAppCheck: process.env.FUNCTIONS_EMULATOR !== "true" }, async (request) => {
+export const searchAddress = onCall({ region: REGION, invoker: "public", enforceAppCheck: ENFORCE_APP_CHECK }, async (request) => {
   const uid = request.auth?.uid;
   if (!uid) {
     throw new HttpsError("unauthenticated", "Sign in first.");
@@ -2035,7 +2050,7 @@ export const searchAddress = onCall({ region: REGION, enforceAppCheck: process.e
  * current image uploads (product photos, banners) are admin actions.
  */
 export const getCloudinarySignature = onCall(
-  { region: REGION, enforceAppCheck: process.env.FUNCTIONS_EMULATOR !== "true" },
+  { region: REGION, invoker: "public", enforceAppCheck: ENFORCE_APP_CHECK },
   async (request) => {
   const uid = request.auth?.uid;
   if (!uid) {
@@ -2189,7 +2204,7 @@ export const expireStaleOrders = onSchedule(
  * Retains order documents intact for tax/accounting requirements.
  */
 export const deleteAccount = onCall(
-  { region: REGION, enforceAppCheck: process.env.FUNCTIONS_EMULATOR !== "true" },
+  { region: REGION, invoker: "public", enforceAppCheck: ENFORCE_APP_CHECK },
   async (request) => {
     const uid = request.auth?.uid;
     if (!uid) {

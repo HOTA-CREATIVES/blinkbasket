@@ -150,10 +150,14 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
     }
 
     if (!authProvider.isEmailVerified) {
-      _showSnackBar(
-        'Verify your email before placing an order. You can resend the link from the home screen.',
-      );
-      return;
+      // Re-check in case the customer just clicked the verification link in their email
+      final verified = await authProvider.refreshEmailVerified();
+      if (!verified) {
+        _showSnackBar(
+          'Verify your email before placing an order. You can resend the link from the home screen.',
+        );
+        return;
+      }
     }
 
     if (!_formKey.currentState!.validate()) {
@@ -192,10 +196,13 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
       return;
     }
 
-    final user = authProvider.currentUserModel;
+    var user = authProvider.currentUserModel;
     if (user == null) {
-      _showSnackBar('User authentication required.');
-      return;
+      user = await authProvider.ensureCurrentUserModel();
+      if (user == null) {
+        _showSnackBar('Please sign in to place your order.');
+        return;
+      }
     }
 
     setState(() => _isSubmitting = true);
@@ -329,6 +336,11 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
     final authProvider = Provider.of<AuthProvider>(context);
     final orderProvider = Provider.of<OrderProvider>(context);
     final user = authProvider.currentUserModel;
+    if (user == null && authProvider.hasActiveSession) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        authProvider.ensureCurrentUserModel();
+      });
+    }
     final scheme = Theme.of(context).colorScheme;
 
     final subtotal = cartProvider.totalAmount;
@@ -373,82 +385,117 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
                                   color: scheme.primary,
                                 ),
                                 const SizedBox(width: AppTokens.s8),
-                                const Text(
-                                  'Delivery Address & Contact',
-                                  style: TextStyle(
-                                    fontWeight: FontWeight.w800,
-                                    fontSize: 15,
+                                const Expanded(
+                                  child: Text(
+                                    'Delivery Address & Contact',
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: TextStyle(
+                                      fontWeight: FontWeight.w800,
+                                      fontSize: 15,
+                                    ),
                                   ),
                                 ),
-                                const Spacer(),
-                                if (user != null && user.village.isNotEmpty)
-                                  Container(
-                                    padding: const EdgeInsets.symmetric(
-                                      horizontal: 8,
-                                      vertical: 4,
-                                    ),
-                                    decoration: BoxDecoration(
-                                      color: scheme.primary.withValues(
-                                        alpha: 0.1,
+                                if (user != null && user.village.isNotEmpty) ...[
+                                  const SizedBox(width: AppTokens.s8),
+                                  Flexible(
+                                    flex: 0,
+                                    child: Container(
+                                      constraints: const BoxConstraints(
+                                        maxWidth: 120,
                                       ),
-                                      borderRadius: BorderRadius.circular(
-                                        AppTokens.rPill,
+                                      padding: const EdgeInsets.symmetric(
+                                        horizontal: 8,
+                                        vertical: 4,
                                       ),
-                                    ),
-                                    child: Text(
-                                      user.village,
-                                      style: TextStyle(
-                                        color: scheme.primary,
-                                        fontWeight: FontWeight.w700,
-                                        fontSize: 12,
+                                      decoration: BoxDecoration(
+                                        color: scheme.primary.withValues(
+                                          alpha: 0.1,
+                                        ),
+                                        borderRadius: BorderRadius.circular(
+                                          AppTokens.rPill,
+                                        ),
+                                      ),
+                                      child: Text(
+                                        user.village,
+                                        maxLines: 1,
+                                        overflow: TextOverflow.ellipsis,
+                                        style: TextStyle(
+                                          color: scheme.primary,
+                                          fontWeight: FontWeight.w700,
+                                          fontSize: 12,
+                                        ),
                                       ),
                                     ),
                                   ),
+                                ],
                               ],
                             ),
                             const SizedBox(height: AppTokens.s12),
                             if (user != null) ...[
-                              Row(
+                              Wrap(
+                                spacing: AppTokens.s16,
+                                runSpacing: AppTokens.s8,
+                                crossAxisAlignment: WrapCrossAlignment.center,
                                 children: [
-                                  const Icon(
-                                    Icons.person_outline_rounded,
-                                    size: 16,
-                                    color: Colors.grey,
-                                  ),
-                                  const SizedBox(width: 6),
-                                  Flexible(
-                                    child: Text(
-                                      user.name.isNotEmpty
-                                          ? user.name
-                                          : 'Customer',
-                                      maxLines: 1,
-                                      overflow: TextOverflow.ellipsis,
-                                      style: const TextStyle(
-                                        fontWeight: FontWeight.w700,
-                                        fontSize: 13.5,
+                                  Row(
+                                    mainAxisSize: MainAxisSize.min,
+                                    children: [
+                                      const Icon(
+                                        Icons.person_outline_rounded,
+                                        size: 16,
+                                        color: Colors.grey,
                                       ),
-                                    ),
-                                  ),
-                                  const SizedBox(width: 12),
-                                  const Icon(
-                                    Icons.phone_outlined,
-                                    size: 16,
-                                    color: Colors.grey,
-                                  ),
-                                  const SizedBox(width: 6),
-                                  Flexible(
-                                    child: Text(
-                                      CustomerHelper.formatPhone(
-                                        user.phone,
-                                        user.email,
+                                      const SizedBox(width: 6),
+                                      ConstrainedBox(
+                                        constraints: BoxConstraints(
+                                          maxWidth:
+                                              MediaQuery.of(context).size.width *
+                                              0.38,
+                                        ),
+                                        child: Text(
+                                          user.name.isNotEmpty
+                                              ? user.name
+                                              : 'Customer',
+                                          maxLines: 1,
+                                          overflow: TextOverflow.ellipsis,
+                                          style: const TextStyle(
+                                            fontWeight: FontWeight.w700,
+                                            fontSize: 13.5,
+                                          ),
+                                        ),
                                       ),
-                                      maxLines: 1,
-                                      overflow: TextOverflow.ellipsis,
-                                      style: const TextStyle(
-                                        fontSize: 13,
-                                        color: Colors.black87,
+                                    ],
+                                  ),
+                                  Row(
+                                    mainAxisSize: MainAxisSize.min,
+                                    children: [
+                                      const Icon(
+                                        Icons.phone_outlined,
+                                        size: 16,
+                                        color: Colors.grey,
                                       ),
-                                    ),
+                                      const SizedBox(width: 6),
+                                      ConstrainedBox(
+                                        constraints: BoxConstraints(
+                                          maxWidth:
+                                              MediaQuery.of(context).size.width *
+                                              0.45,
+                                        ),
+                                        child: Text(
+                                          CustomerHelper.formatPhone(
+                                            user.phone,
+                                            user.email,
+                                          ),
+                                          maxLines: 1,
+                                          overflow: TextOverflow.ellipsis,
+                                          style: const TextStyle(
+                                            fontSize: 13,
+                                            color: Colors.black87,
+                                          ),
+                                        ),
+                                      ),
+                                    ],
                                   ),
                                 ],
                               ),
@@ -474,6 +521,7 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
                                         value: addr,
                                         child: Text(
                                           '${addr.name} (${addr.addressLine1})',
+                                          maxLines: 1,
                                           overflow: TextOverflow.ellipsis,
                                         ),
                                       );
@@ -565,6 +613,8 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
                                     Expanded(
                                       child: Text(
                                         _pinLabel(),
+                                        maxLines: 2,
+                                        overflow: TextOverflow.ellipsis,
                                         style: TextStyle(
                                           fontWeight: FontWeight.w700,
                                           fontSize: 13,

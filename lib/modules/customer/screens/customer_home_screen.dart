@@ -19,6 +19,7 @@ import '../../../domain/entities/product.dart';
 import '../../../domain/entities/service_zone.dart';
 import 'cart_screen.dart';
 import 'order_history_screen.dart';
+import 'orders_tab_screen.dart';
 import '../../../core/providers/order_provider.dart';
 import '../../../core/utils/route_generator.dart';
 import '../../../domain/entities/order.dart';
@@ -460,23 +461,26 @@ class _CustomerHomeScreenState extends State<CustomerHomeScreen> {
           },
         ),
 
-        // Bottom space for active cart bar overhang
+        // Bottom space for floating navbar overhang
         const SliverToBoxAdapter(
-          child: SizedBox(height: 60),
+          child: SizedBox(height: 100),
         ),
       ],
     );
 
     final tabs = [
       Scaffold(
+        extendBody: true,
+        backgroundColor: Colors.transparent,
         body: storeCustomScrollView,
       ),
       const CartScreen(),
-      OrderHistoryScreen(onBrowse: () => setState(() => _currentIndex = 0)),
+      OrdersTabScreen(onBrowse: () => setState(() => _currentIndex = 0)),
     ];
 
     return Scaffold(
-      backgroundColor: Colors.transparent,
+      extendBody: true,
+      backgroundColor: Theme.of(context).scaffoldBackgroundColor,
       body: IndexedStack(
         index: _currentIndex,
         children: tabs,
@@ -506,12 +510,14 @@ class _CustomerHomeScreenState extends State<CustomerHomeScreen> {
                     label: 'Cart',
                     badgeCount: cart.itemCount,
                   ),
-                  // One Orders tab: orders in progress are listed first, each with
-                  // its delivery code and a Track button. The badge counts them.
                   FloatingNavItem(
-                    icon: Icons.receipt_long_outlined,
-                    activeIcon: Icons.receipt_long_rounded,
-                    label: 'Orders',
+                    icon: activeOrders.isNotEmpty
+                        ? Icons.delivery_dining_outlined
+                        : Icons.receipt_long_outlined,
+                    activeIcon: activeOrders.isNotEmpty
+                        ? Icons.delivery_dining_rounded
+                        : Icons.receipt_long_rounded,
+                    label: activeOrders.isNotEmpty ? 'Tracking' : 'Orders',
                     badgeCount: activeOrders.length,
                   ),
                 ],

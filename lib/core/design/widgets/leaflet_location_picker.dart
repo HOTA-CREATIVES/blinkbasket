@@ -7,14 +7,13 @@ import '../../services/geocoding_service.dart';
 import '../../utils/customer_helper.dart';
 import '../app_tokens.dart';
 
-/// Free, no-API-key CartoDB Voyager tiles — a more polished/legible look
-/// than plain OpenStreetMap raster tiles at zero cost. CartoDB's free tier
-/// asks for attribution, added below each map via [_MapAttribution].
-const _kTileUrlTemplate = 'https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png';
-const _kTileSubdomains = ['a', 'b', 'c', 'd'];
+/// Standard OpenStreetMap raster tiles — 100% free and open, zero API key required,
+/// with high availability CDN and fallback to OSM Humanitarian tiles.
+const _kTileUrlTemplate = 'https://tile.openstreetmap.org/{z}/{x}/{y}.png';
+const _kFallbackTileUrlTemplate = 'https://{s}.tile.openstreetmap.fr/hot/{z}/{x}/{y}.png';
+const _kTileSubdomains = ['a', 'b', 'c'];
 
-/// Sent to the tile server so it can identify (and contact) this app. Must be
-/// the real application id — it was the `com.example` placeholder.
+/// Sent to the tile server so it can identify (and contact) this app.
 const _kUserAgentPackage = 'com.jcmart.app';
 
 class _MapAttribution extends StatelessWidget {
@@ -25,7 +24,7 @@ class _MapAttribution extends StatelessWidget {
     return const RichAttributionWidget(
       alignment: AttributionAlignment.bottomRight,
       attributions: [
-        TextSourceAttribution('© OpenStreetMap contributors © CARTO'),
+        TextSourceAttribution('© OpenStreetMap contributors'),
       ],
     );
   }
@@ -334,9 +333,11 @@ class _LeafletLocationPickerState extends State<LeafletLocationPicker> {
                         children: [
                           TileLayer(
                             urlTemplate: _kTileUrlTemplate,
+                            fallbackUrl: _kFallbackTileUrlTemplate,
                             subdomains: _kTileSubdomains,
                             userAgentPackageName: _kUserAgentPackage,
                             tileProvider: widget.tileProvider,
+                            maxZoom: 19,
                             errorTileCallback: (tile, error, stackTrace) {
                               // Count quietly; only warn once it is clearly
                               // more than a stray missing tile.
@@ -630,8 +631,10 @@ class LeafletLocationPreview extends StatelessWidget {
             children: [
               TileLayer(
                 urlTemplate: _kTileUrlTemplate,
+                fallbackUrl: _kFallbackTileUrlTemplate,
                 subdomains: _kTileSubdomains,
                 userAgentPackageName: _kUserAgentPackage,
+                maxZoom: 19,
               ),
               const _MapAttribution(),
               MarkerLayer(

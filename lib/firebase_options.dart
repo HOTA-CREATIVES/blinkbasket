@@ -52,7 +52,7 @@ class DefaultFirebaseOptions {
 
   static const FirebaseOptions android = FirebaseOptions(
     apiKey: 'AIzaSyD4ELcRyWxVZwjFkoa4nmw97fGYKST-gKs',
-    appId: '1:855090552291:android:5007077f6da40d8c6a54d6',
+    appId: '1:855090552291:android:9a56598fa3f5b86f6a54d6',
     messagingSenderId: '855090552291',
     projectId: 'hypermart-ee8ef',
     storageBucket: 'hypermart-ee8ef.firebasestorage.app',

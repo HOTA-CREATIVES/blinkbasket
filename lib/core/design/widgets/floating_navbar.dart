@@ -1,4 +1,5 @@
 import 'dart:math';
+import 'dart:ui' as ui;
 import 'package:flutter/material.dart';
 
 class FloatingNavItem {
@@ -46,18 +47,13 @@ class FloatingNavbar extends StatelessWidget {
           width: navWidth,
           height: 60,
           decoration: BoxDecoration(
-            color: scheme.surface,
             borderRadius: BorderRadius.circular(32),
-            border: Border.all(
-              color: scheme.outlineVariant.withValues(alpha: 0.6),
-              width: 1,
-            ),
             boxShadow: [
               BoxShadow(
-                color: Colors.black.withValues(alpha: 0.12),
+                color: Colors.black.withValues(alpha: 0.10),
                 blurRadius: 20,
-                spreadRadius: 2,
-                offset: const Offset(0, 8),
+                spreadRadius: 1,
+                offset: const Offset(0, 6),
               ),
               BoxShadow(
                 color: scheme.primary.withValues(alpha: 0.08),
@@ -67,8 +63,21 @@ class FloatingNavbar extends StatelessWidget {
               ),
             ],
           ),
-          child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
+          child: ClipRRect(
+            borderRadius: BorderRadius.circular(32),
+            child: BackdropFilter(
+              filter: ui.ImageFilter.blur(sigmaX: 16, sigmaY: 16),
+              child: Container(
+                decoration: BoxDecoration(
+                  color: scheme.surface.withValues(alpha: 0.90),
+                  borderRadius: BorderRadius.circular(32),
+                  border: Border.all(
+                    color: scheme.outlineVariant.withValues(alpha: 0.6),
+                    width: 1,
+                  ),
+                ),
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
             child: Row(
               mainAxisAlignment: MainAxisAlignment.spaceEvenly,
               children: List.generate(items.length, (index) {
@@ -119,12 +128,15 @@ class FloatingNavbar extends StatelessWidget {
                   ),
                 );
               }),
-            ),
-          ),
-        ),
-      ),
-    );
-  }
+            ), // Row
+          ), // Padding
+        ), // inner Container
+      ), // BackdropFilter
+    ), // ClipRRect
+  ), // outer pill Container
+), // alignment Container
+); // SizedBox
+}
 
   Widget _buildIcon(BuildContext context, FloatingNavItem item, bool isSelected) {
     final scheme = Theme.of(context).colorScheme;

@@ -1,6 +1,8 @@
 import 'dart:async';
 import 'package:cloud_firestore/cloud_firestore.dart' hide Order;
 import 'package:cloud_functions/cloud_functions.dart';
+import 'package:firebase_auth/firebase_auth.dart';
+import 'package:flutter/foundation.dart';
 import '../../domain/entities/delivery_otp.dart';
 import '../../domain/entities/order.dart';
 import '../../domain/entities/rider_location.dart';
@@ -105,6 +107,16 @@ class FirebaseOrderRepository implements OrderRepository {
     String? requestId,
   }) async {
     try {
+      final user = FirebaseAuth.instance.currentUser;
+      if (user == null) {
+        return const PlaceOrderResult.failure(
+          'Please sign in to place your order.',
+        );
+      }
+      // Refresh the Firebase Auth ID token so the callable gateway receives
+      // a valid, non-expired token with all claims and email verification status.
+      await user.getIdToken(true);
+
       final callable = _functions.httpsCallable('placeOrder');
       final response = await callable.call<dynamic>({
         'items': items
@@ -127,11 +139,13 @@ class FirebaseOrderRepository implements OrderRepository {
         totalAmount: (data['totalAmount'] as num?)?.toDouble(),
       );
     } on FirebaseFunctionsException catch (e) {
-      return PlaceOrderResult.failure(
-          e.message ?? 'Failed to place order. Please try again.');
-    } catch (_) {
-      return PlaceOrderResult.failure(
-          'Failed to place order. Check your connection and try again.');
+      debugPrint('placeOrder FirebaseFunctionsException: [${e.code}] ${e.message}');
+      final msg = userMessageFor(e,
+          fallback: e.message ?? 'Failed to place order. Please try again.');
+      return PlaceOrderResult.failure(msg);
+    } catch (e) {
+      debugPrint('placeOrder unexpected error: $e');
+      return PlaceOrderResult.failure(userMessageFor(e));
     }
   }
 

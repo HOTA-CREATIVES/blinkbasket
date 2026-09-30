@@ -205,11 +205,13 @@ class FirebaseAuthRepository implements AuthRepository {
       final UserCredential userCredential = await _auth.signInWithCredential(credential);
       return AuthResult(isSuccess: true, user: userCredential.user);
     } on FirebaseAuthException catch (e) {
+      debugPrint('[GoogleSignInError] FirebaseAuthException: ${e.code} - ${e.message}');
       return AuthResult(
         isSuccess: false,
         errorMessage: _getReadableFirebaseAuthError(e.code),
       );
-    } catch (e) {
+    } catch (e, stack) {
+      debugPrint('[GoogleSignInError] Exception: $e\n$stack');
       return AuthResult(isSuccess: false, errorMessage: userMessageFor(e));
     }
   }
