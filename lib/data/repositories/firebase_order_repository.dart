@@ -1,6 +1,9 @@
 import 'dart:async';
 import 'package:cloud_firestore/cloud_firestore.dart' hide Order;
 import 'package:cloud_functions/cloud_functions.dart';
+import 'package:firebase_app_check/firebase_app_check.dart';
+import 'package:firebase_auth/firebase_auth.dart' show FirebaseAuth;
+import 'package:flutter/foundation.dart' show debugPrint;
 import '../../domain/entities/delivery_otp.dart';
 import '../../domain/entities/order.dart';
 import '../../domain/entities/rider_location.dart';
@@ -106,7 +109,7 @@ class FirebaseOrderRepository implements OrderRepository {
   }) async {
     try {
       final callable = _functions.httpsCallable('placeOrder');
-      final response = await callable.call<dynamic>({
+      final payload = <String, dynamic>{
         'items': items
             .map((item) => <String, dynamic>{
                   'productId': item.productId,
@@ -119,7 +122,18 @@ class FirebaseOrderRepository implements OrderRepository {
         if (latitude != null) 'latitude': latitude,
         if (longitude != null) 'longitude': longitude,
         if (requestId != null && requestId.isNotEmpty) 'requestId': requestId,
-      });
+      };
+      HttpsCallableResult<dynamic> response;
+      try {
+        response = await callable.call<dynamic>(payload);
+      } on FirebaseFunctionsException catch (e) {
+        if (e.code != 'unauthenticated') rethrow;
+        // A stale ID token or App Check token is the usual reason a signed-in
+        // customer is refused. Refresh both and retry once; the same requestId
+        // makes the retry safe (it can never create a second order).
+        await _refreshCredentials();
+        response = await callable.call<dynamic>(payload);
+      }
       final data = Map<String, dynamic>.from(response.data as Map);
       return PlaceOrderResult.success(
         orderId: data['orderId'] as String?,
@@ -127,11 +141,28 @@ class FirebaseOrderRepository implements OrderRepository {
         totalAmount: (data['totalAmount'] as num?)?.toDouble(),
       );
     } on FirebaseFunctionsException catch (e) {
+      if (e.code == 'unauthenticated') {
+        return PlaceOrderResult.failure(
+            'We couldn\'t verify this device. Please close and reopen the app, then try again.');
+      }
       return PlaceOrderResult.failure(
           e.message ?? 'Failed to place order. Please try again.');
     } catch (_) {
       return PlaceOrderResult.failure(
           'Failed to place order. Check your connection and try again.');
+    }
+  }
+
+  Future<void> _refreshCredentials() async {
+    try {
+      await FirebaseAuth.instance.currentUser?.getIdToken(true);
+    } catch (e) {
+      debugPrint('ID token refresh failed: $e');
+    }
+    try {
+      await FirebaseAppCheck.instance.getToken(true);
+    } catch (e) {
+      debugPrint('App Check token refresh failed: $e');
     }
   }
 
