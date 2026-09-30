@@ -2,22 +2,15 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:image_picker/image_picker.dart';
-import 'package:url_launcher/url_launcher.dart';
 import 'package:share_plus/share_plus.dart';
-import 'package:package_info_plus/package_info_plus.dart';
+import '../../../core/design/app_tokens.dart';
 import '../../../core/models/user_model.dart';
 import '../../../core/providers/auth_provider.dart';
-import '../../../core/providers/config_provider.dart';
 import '../../../core/providers/order_provider.dart';
 import '../../../core/providers/profile_provider.dart';
-import '../../../domain/entities/app_config.dart';
 import '../../../domain/entities/order.dart';
 import '../widgets/edit_profile_dialog.dart';
-import '../widgets/profile_shimmer.dart';
-import '../../customer/screens/order_history_screen.dart';
-import '../../customer/screens/order_tracking_screen.dart';
-import 'address_book_screen.dart';
-import 'wishlist_screen.dart';
+import '../../../core/utils/route_generator.dart';
 
 class UserProfileScreen extends StatefulWidget {
   final bool isEmbedded;
@@ -41,7 +34,7 @@ class _UserProfileScreenState extends State<UserProfileScreen> {
 
       if (image != null && mounted) {
         final profileProvider = Provider.of<ProfileProvider>(context, listen: false);
-        
+
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
             content: Row(
@@ -49,7 +42,10 @@ class _UserProfileScreenState extends State<UserProfileScreen> {
                 SizedBox(
                   width: 20,
                   height: 20,
-                  child: CircularProgressIndicator(strokeWidth: 2, valueColor: AlwaysStoppedAnimation(Colors.white)),
+                  child: CircularProgressIndicator(
+                    strokeWidth: 2,
+                    valueColor: AlwaysStoppedAnimation(Colors.white),
+                  ),
                 ),
                 SizedBox(width: 16),
                 Text("Uploading profile photo..."),
@@ -65,7 +61,7 @@ class _UserProfileScreenState extends State<UserProfileScreen> {
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text("Error selecting image: $e"), backgroundColor: Colors.red),
+          SnackBar(content: Text("Error selecting image: $e"), backgroundColor: AppTokens.statusCancelled),
         );
       }
     }
@@ -74,26 +70,26 @@ class _UserProfileScreenState extends State<UserProfileScreen> {
   void _showAvatarPicker(UserModel user) {
     showModalBottomSheet(
       context: context,
-      backgroundColor: Colors.white,
+      backgroundColor: Theme.of(context).colorScheme.surface,
       shape: const RoundedRectangleBorder(
         borderRadius: BorderRadius.only(
-          topLeft: Radius.circular(24),
-          topRight: Radius.circular(24),
+          topLeft: Radius.circular(AppTokens.rXl),
+          topRight: Radius.circular(AppTokens.rXl),
         ),
       ),
       builder: (context) {
         return Container(
-          padding: const EdgeInsets.all(24),
+          padding: const EdgeInsets.all(AppTokens.s24),
           child: Column(
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              const Text(
+              Text(
                 "Update Profile Photo",
-                style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+                style: Theme.of(context).textTheme.titleLarge,
                 textAlign: TextAlign.center,
               ),
-              const SizedBox(height: 24),
+              const SizedBox(height: AppTokens.s24),
               Row(
                 mainAxisAlignment: MainAxisAlignment.spaceEvenly,
                 children: [
@@ -117,7 +113,7 @@ class _UserProfileScreenState extends State<UserProfileScreen> {
                     _buildPickerOption(
                       icon: Icons.delete_outline_rounded,
                       label: "Remove",
-                      color: Colors.red.shade700,
+                      color: AppTokens.statusCancelled,
                       onTap: () async {
                         Navigator.pop(context);
                         final profileProvider = Provider.of<ProfileProvider>(context, listen: false);
@@ -126,7 +122,7 @@ class _UserProfileScreenState extends State<UserProfileScreen> {
                     ),
                 ],
               ),
-              const SizedBox(height: 16),
+              const SizedBox(height: AppTokens.s16),
             ],
           ),
         );
@@ -138,22 +134,23 @@ class _UserProfileScreenState extends State<UserProfileScreen> {
     required IconData icon,
     required String label,
     required VoidCallback onTap,
-    Color color = Colors.green,
+    Color color = AppTokens.primary,
   }) {
+    final scheme = Theme.of(context).colorScheme;
     return InkWell(
       onTap: onTap,
-      borderRadius: BorderRadius.circular(16),
+      borderRadius: BorderRadius.circular(AppTokens.rLg),
       child: Container(
         width: 90,
-        padding: const EdgeInsets.symmetric(vertical: 16),
+        padding: const EdgeInsets.symmetric(vertical: AppTokens.s16),
         decoration: BoxDecoration(
-          border: Border.all(color: Colors.grey.shade200),
-          borderRadius: BorderRadius.circular(16),
+          borderRadius: BorderRadius.circular(AppTokens.rLg),
+          border: Border.all(color: scheme.outlineVariant),
         ),
         child: Column(
           children: [
             Icon(icon, size: 36, color: color),
-            const SizedBox(height: 8),
+            const SizedBox(height: AppTokens.s8),
             Text(label, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13)),
           ],
         ),
@@ -172,49 +169,34 @@ class _UserProfileScreenState extends State<UserProfileScreen> {
 
   Future<void> _shareInvite() async {
     await Share.share(
-      "I'm shopping on J C Mart — fast hyperlocal delivery with Cash on Delivery. Give it a try!",
+      "I'm shopping on J C Mart — fast hyperlocal delivery with Cash on Delivery! Download now & order fresh groceries.",
       subject: "Try J C Mart",
     );
   }
 
-  Future<void> _showAboutSheet() async {
-    final info = await PackageInfo.fromPlatform();
-    if (!mounted) return;
-    showAboutDialog(
-      context: context,
-      applicationName: "J C Mart",
-      applicationVersion: "v${info.version} (${info.buildNumber})",
-      applicationIcon: ClipRRect(
-        borderRadius: BorderRadius.circular(8),
-        child: Image.asset('assets/images/logo.png', width: 48, height: 48),
-      ),
-      children: const [
-        SizedBox(height: 12),
-        Text(
-          "Hyperlocal quick-commerce with Cash-on-Delivery. Fresh groceries "
-          "and daily essentials delivered to your doorstep.",
-        ),
-      ],
-    );
-  }
 
   Future<void> _confirmLogout(AuthProvider authProvider) async {
+    final scheme = Theme.of(context).colorScheme;
     final shouldLogout = await showDialog<bool>(
       context: context,
       builder: (dialogContext) => AlertDialog(
-        backgroundColor: Colors.white,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        backgroundColor: scheme.surface,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(AppTokens.rXl)),
         title: const Text("Log out?", style: TextStyle(fontWeight: FontWeight.bold)),
-        content: const Text("You'll need to sign in again to access your account."),
+        content: const Text("You will need to sign in again to access your account."),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(dialogContext, false),
-            style: TextButton.styleFrom(foregroundColor: Colors.grey.shade700),
+            style: TextButton.styleFrom(foregroundColor: scheme.onSurfaceVariant),
             child: const Text("Cancel", style: TextStyle(fontWeight: FontWeight.w600)),
           ),
-          TextButton(
+          ElevatedButton(
             onPressed: () => Navigator.pop(dialogContext, true),
-            style: TextButton.styleFrom(foregroundColor: Colors.red.shade700),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: AppTokens.statusCancelled,
+              foregroundColor: Colors.white,
+              shape: const StadiumBorder(),
+            ),
             child: const Text("Log Out", style: TextStyle(fontWeight: FontWeight.bold)),
           ),
         ],
@@ -222,93 +204,88 @@ class _UserProfileScreenState extends State<UserProfileScreen> {
     );
 
     if (shouldLogout != true) return;
-    if (!widget.isEmbedded && mounted) Navigator.pop(context);
+    if (!mounted) return;
+    final nav = Navigator.of(context, rootNavigator: true);
     await authProvider.logout();
-  }
-
-  Future<void> _callSupport(String phone) async {
-    final uri = Uri(scheme: 'tel', path: phone);
-    if (await canLaunchUrl(uri)) {
-      await launchUrl(uri);
+    if (mounted) {
+      nav.pushNamedAndRemoveUntil(RouteGenerator.login, (route) => false);
     }
   }
 
-  Future<void> _openSupportWhatsapp(String number) async {
-    final uri = Uri.parse('https://wa.me/$number');
-    if (await canLaunchUrl(uri)) {
-      await launchUrl(uri, mode: LaunchMode.externalApplication);
-    }
-  }
-
-  void _showHelpDialog() {
-    final configProvider = Provider.of<ConfigProvider>(context, listen: false);
-    showDialog(
+  Future<void> _confirmDeleteAccount(AuthProvider authProvider) async {
+    final scheme = Theme.of(context).colorScheme;
+    final confirmed = await showDialog<bool>(
       context: context,
-      builder: (dialogContext) {
-        return AlertDialog(
-          backgroundColor: Colors.white,
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
-          title: const Text("Customer Support Helpline", style: TextStyle(fontWeight: FontWeight.bold)),
-          content: StreamBuilder<AppConfig>(
-            stream: configProvider.streamAppConfig(),
-            builder: (context, snapshot) {
-              final config = snapshot.data;
-              final whatsapp = config?.supportWhatsapp;
-              final phone = config?.supportPhone;
-              return Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  ListTile(
-                    contentPadding: EdgeInsets.zero,
-                    leading: const Icon(Icons.chat_bubble_outline_rounded, color: Colors.green),
-                    title: const Text("Chat Assistance", style: TextStyle(fontWeight: FontWeight.bold)),
-                    subtitle: Text(whatsapp != null ? "Tap to chat on WhatsApp" : "Not available yet"),
-                    onTap: whatsapp == null ? null : () => _openSupportWhatsapp(whatsapp),
-                  ),
-                  const Divider(),
-                  ListTile(
-                    contentPadding: EdgeInsets.zero,
-                    leading: const Icon(Icons.phone_outlined, color: Colors.green),
-                    title: const Text("Direct Phone Hotline", style: TextStyle(fontWeight: FontWeight.bold)),
-                    subtitle: Text(phone ?? "Not available yet"),
-                    onTap: phone == null ? null : () => _callSupport(phone),
-                  ),
-                ],
-              );
-            },
+      builder: (dialogContext) => AlertDialog(
+        backgroundColor: scheme.surface,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(AppTokens.rXl)),
+        title: const Text("Delete Account?", style: TextStyle(fontWeight: FontWeight.bold, color: Colors.red)),
+        content: const Text(
+          "Are you sure you want to permanently delete your account? "
+          "All personal details, saved addresses, and active preferences will be erased. "
+          "This action cannot be undone.",
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext, false),
+            style: TextButton.styleFrom(foregroundColor: scheme.onSurfaceVariant),
+            child: const Text("Cancel", style: TextStyle(fontWeight: FontWeight.w600)),
           ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(dialogContext),
-              child: const Text("Close"),
+          ElevatedButton(
+            onPressed: () => Navigator.pop(dialogContext, true),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: Colors.red,
+              foregroundColor: Colors.white,
+              shape: const StadiumBorder(),
             ),
-          ],
-        );
-      },
+            child: const Text("Delete Account", style: TextStyle(fontWeight: FontWeight.bold)),
+          ),
+        ],
+      ),
     );
+
+    if (confirmed != true) return;
+    if (!mounted) return;
+    final nav = Navigator.of(context, rootNavigator: true);
+    final messenger = ScaffoldMessenger.of(context);
+    final success = await authProvider.deleteAccount();
+    if (!mounted) return;
+    if (success) {
+      nav.pushNamedAndRemoveUntil(RouteGenerator.login, (route) => false);
+    } else {
+      messenger.showSnackBar(
+        SnackBar(
+          content: Text(authProvider.errorMessage ?? "Failed to delete account"),
+          backgroundColor: Colors.red,
+        ),
+      );
+    }
   }
 
   @override
   Widget build(BuildContext context) {
     final authProvider = Provider.of<AuthProvider>(context);
     final user = authProvider.currentUserModel;
+    final scheme = Theme.of(context).colorScheme;
 
     if (user == null) {
       return Scaffold(
-        backgroundColor: Colors.grey.shade50,
-        body: const SafeArea(child: ProfileShimmer()),
+        backgroundColor: scheme.surfaceContainerLowest,
+        body: const Center(child: CircularProgressIndicator()),
       );
     }
 
+    final isRider = user.role == 'delivery';
+
     return Scaffold(
-      backgroundColor: Colors.grey.shade50,
+      backgroundColor: const Color(0xFFF8FAFC),
       appBar: AppBar(
-        title: const Text(
-          "Your Account",
-          style: TextStyle(fontWeight: FontWeight.bold, fontSize: 18),
+        title: Text(
+          isRider ? "Rider Profile" : "My Profile",
+          style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 18),
         ),
-        backgroundColor: Colors.white,
-        foregroundColor: Colors.black87,
+        backgroundColor: scheme.surface,
+        foregroundColor: scheme.onSurface,
         elevation: 0.5,
         leading: widget.isEmbedded
             ? null
@@ -316,355 +293,389 @@ class _UserProfileScreenState extends State<UserProfileScreen> {
                 icon: const Icon(Icons.arrow_back_ios_new_rounded, size: 20),
                 onPressed: () => Navigator.pop(context),
               ),
-        actions: [
-          IconButton(
-            icon: const Icon(Icons.edit_note_rounded, color: Colors.green, size: 28),
-            onPressed: () => _showEditProfileDialog(user),
-          ),
-        ],
       ),
       body: SingleChildScrollView(
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            _ActiveOrderBanner(customerId: user.uid),
-            const SizedBox(height: 24),
-            // Profile photo, name, and phone details in a clean center section
-            Center(
-              child: Column(
-                children: [
-                  Stack(
-                    children: [
-                      Container(
-                        width: 90,
-                        height: 90,
-                        decoration: BoxDecoration(
-                          shape: BoxShape.circle,
-                          color: Colors.white,
-                          border: Border.all(color: Colors.grey.shade200, width: 3),
-                        ),
-                        child: ClipOval(
-                          child: user.avatarUrl != null && user.avatarUrl!.isNotEmpty
-                              ? (user.avatarUrl!.startsWith('http')
-                                  ? Image.network(
-                                      user.avatarUrl!,
-                                      fit: BoxFit.cover,
-                                      errorBuilder: (c, e, s) => _buildPlaceholderAvatar(),
-                                    )
-                                  : Image.file(
-                                      File(user.avatarUrl!),
-                                      fit: BoxFit.cover,
-                                      errorBuilder: (c, e, s) => _buildPlaceholderAvatar(),
-                                    ))
-                              : _buildPlaceholderAvatar(),
-                        ),
-                      ),
-                      Positioned(
-                        bottom: 0,
-                        right: 0,
-                        child: GestureDetector(
-                          onTap: () => _showAvatarPicker(user),
-                          child: Container(
-                            padding: const EdgeInsets.all(6),
-                            decoration: const BoxDecoration(
-                              color: Colors.green,
-                              shape: BoxShape.circle,
-                            ),
-                            child: const Icon(
-                              Icons.camera_alt_rounded,
-                              size: 14,
-                              color: Colors.white,
-                            ),
-                          ),
-                        ),
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 12),
-                  Text(
-                    user.name.isNotEmpty ? user.name : "J C Mart User",
-                    style: const TextStyle(
-                      fontSize: 20,
-                      fontWeight: FontWeight.bold,
-                      color: Colors.black87,
-                    ),
-                  ),
-                  const SizedBox(height: 4),
-                  Text(
-                    user.phone.isNotEmpty ? user.phone : "No Phone Linked",
-                    style: TextStyle(color: Colors.grey.shade600, fontSize: 13, fontWeight: FontWeight.w500),
-                  ),
-                  if (user.email.isNotEmpty) ...[
-                    const SizedBox(height: 2),
-                    Text(
-                      user.email,
-                      style: TextStyle(color: Colors.grey.shade500, fontSize: 12),
-                    ),
-                  ],
-                  if (user.village.isNotEmpty) ...[
-                    const SizedBox(height: 8),
-                    Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Icon(Icons.location_on_outlined, size: 14, color: Colors.green.shade600),
-                        const SizedBox(width: 3),
-                        Text(
-                          user.village,
-                          style: TextStyle(
-                            color: Colors.green.shade700,
-                            fontSize: 12,
-                            fontWeight: FontWeight.w600,
-                          ),
-                        ),
-                      ],
-                    ),
-                  ],
-                  const SizedBox(height: 6),
-                  Text(
-                    "Member since ${_formatMemberSince(user.createdAt)}",
-                    style: TextStyle(color: Colors.grey.shade400, fontSize: 11),
-                  ),
-                ],
-              ),
-            ),
-            const SizedBox(height: 24),
+            const SizedBox(height: AppTokens.s16),
 
-            // 2. Quick Action Grid (2 Columns: Orders, Help)
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 20.0),
-              child: Row(
-                children: [
-                  Expanded(
-                    child: InkWell(
-                      onTap: () {
-                        Navigator.push(
-                          context,
-                          MaterialPageRoute(builder: (context) => const OrderHistoryScreen()),
-                        );
-                      },
-                      child: Container(
-                        padding: const EdgeInsets.symmetric(vertical: 14),
-                        decoration: BoxDecoration(
-                          color: Colors.white,
-                          borderRadius: BorderRadius.circular(16),
-                          border: Border.all(color: Colors.grey.shade200),
-                        ),
-                        child: const Column(
-                          children: [
-                            Icon(Icons.shopping_basket_outlined, color: Colors.green, size: 28),
-                            SizedBox(height: 6),
-                            Text("Your orders", style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12)),
-                          ],
-                        ),
-                      ),
-                    ),
-                  ),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    child: InkWell(
-                      onTap: _showHelpDialog,
-                      child: Container(
-                        padding: const EdgeInsets.symmetric(vertical: 14),
-                        decoration: BoxDecoration(
-                          color: Colors.white,
-                          borderRadius: BorderRadius.circular(16),
-                          border: Border.all(color: Colors.grey.shade200),
-                        ),
-                        child: const Column(
-                          children: [
-                            Icon(Icons.support_agent_rounded, color: Colors.blue, size: 28),
-                            SizedBox(height: 6),
-                            Text("Need help?", style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12)),
-                          ],
-                        ),
-                      ),
-                    ),
-                  ),
-                ],
-              ),
-            ),
-            const SizedBox(height: 24),
+            // 1. Clean Profile Info Card
+            _buildCleanProfileCard(user, isRider: isRider),
 
-            // 3. Grouped lists: Your Information
-            _buildSectionHeader("Your Information"),
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 20.0),
-              child: Container(
-                decoration: BoxDecoration(
-                  color: Colors.white,
-                  borderRadius: BorderRadius.circular(20),
-                  border: Border.all(color: Colors.grey.shade200),
-                ),
-                child: Column(
-                  children: [
-                    _buildMenuTile(
-                      icon: Icons.menu_book_outlined,
-                      title: "Address book",
-                      onTap: () {
-                        Navigator.push(
-                          context,
-                          MaterialPageRoute(builder: (context) => const AddressBookScreen()),
-                        );
-                      },
-                    ),
-                    const Divider(height: 1, indent: 56),
-                    _buildMenuTile(
-                      icon: Icons.favorite_border_rounded,
-                      title: "Your wishlist",
-                      onTap: () {
-                        Navigator.push(
-                          context,
-                          MaterialPageRoute(builder: (context) => const WishlistScreen()),
-                        );
-                      },
-                    ),
-                  ],
-                ),
-              ),
-            ),
-            const SizedBox(height: 24),
+            const SizedBox(height: AppTokens.s16),
 
-            // 4. Notification preferences
-            _buildSectionHeader("Notifications"),
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 20.0),
-              child: Container(
-                decoration: BoxDecoration(
-                  color: Colors.white,
-                  borderRadius: BorderRadius.circular(20),
-                  border: Border.all(color: Colors.grey.shade200),
-                ),
-                child: SwitchListTile(
-                  secondary: Icon(Icons.notifications_active_outlined, color: Colors.green.shade700),
-                  title: const Text(
-                    "Order updates",
-                    style: TextStyle(fontWeight: FontWeight.w500, fontSize: 14),
-                  ),
-                  subtitle: const Text(
-                    "Get push alerts as your order moves",
-                    style: TextStyle(fontSize: 12, color: Colors.grey),
-                  ),
-                  activeColor: Colors.green,
-                  value: user.notificationsEnabled,
-                  onChanged: (enabled) {
-                    Provider.of<ProfileProvider>(context, listen: false)
-                        .setNotificationsEnabled(enabled);
+            // 2. Active Order Live Tracking Banner (customers only)
+            if (!isRider) ...[
+              _ActiveOrderBanner(customerId: user.uid),
+              const SizedBox(height: AppTokens.s20),
+
+              // 3. Section 1: Orders & Wishlist (customers only)
+              _buildSectionHeader("MY ORDERS & SAVED"),
+              _buildCardContainer([
+                _buildMenuTile(
+                  icon: Icons.shopping_basket_outlined,
+                  title: "Your Orders",
+                  subtitle: "View order history and track live deliveries",
+                  onTap: () {
+                    Navigator.pushNamed(context, RouteGenerator.orderHistory);
                   },
                 ),
-              ),
-            ),
-            const SizedBox(height: 24),
-
-            // 5. More: invite + about
-            _buildSectionHeader("More"),
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 20.0),
-              child: Container(
-                decoration: BoxDecoration(
-                  color: Colors.white,
-                  borderRadius: BorderRadius.circular(20),
-                  border: Border.all(color: Colors.grey.shade200),
+                const Divider(height: 1, indent: 56),
+                _buildMenuTile(
+                  icon: Icons.location_on_outlined,
+                  title: "Address Book",
+                  subtitle: user.addresses.isNotEmpty
+                      ? "${user.addresses.length} saved delivery address${user.addresses.length > 1 ? 'es' : ''}"
+                      : "Manage delivery addresses",
+                  badgeText: user.addresses.isNotEmpty ? "${user.addresses.length}" : null,
+                  onTap: () {
+                    Navigator.pushNamed(context, RouteGenerator.addressBook);
+                  },
                 ),
-                child: Column(
-                  children: [
-                    _buildMenuTile(
-                      icon: Icons.card_giftcard_rounded,
-                      title: "Invite friends",
-                      onTap: _shareInvite,
-                    ),
-                    const Divider(height: 1, indent: 56),
-                    _buildMenuTile(
-                      icon: Icons.info_outline_rounded,
-                      title: "About J C Mart",
-                      onTap: _showAboutSheet,
-                    ),
-                  ],
+                const Divider(height: 1, indent: 56),
+                _buildMenuTile(
+                  icon: Icons.favorite_border_rounded,
+                  title: "Wishlist",
+                  subtitle: user.favoriteProductIds.isNotEmpty
+                      ? "${user.favoriteProductIds.length} saved item${user.favoriteProductIds.length > 1 ? 's' : ''}"
+                      : "Your favorite saved items",
+                  badgeText: user.favoriteProductIds.isNotEmpty ? "${user.favoriteProductIds.length}" : null,
+                  onTap: () {
+                    Navigator.pushNamed(context, RouteGenerator.wishlist);
+                  },
                 ),
-              ),
-            ),
-            const SizedBox(height: 28),
+              ]),
+              const SizedBox(height: AppTokens.s20),
+            ],
 
-            // 5. Log out action button
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 20.0),
-              child: DecoratedBox(
-                decoration: BoxDecoration(
-                  gradient: LinearGradient(
-                    colors: [Colors.red.shade600, Colors.red.shade400],
-                    begin: Alignment.topLeft,
-                    end: Alignment.bottomRight,
+            // 4. Section 2: Preferences & Support
+            _buildSectionHeader("HELP & PREFERENCES"),
+            _buildCardContainer([
+              _buildMenuTile(
+                icon: Icons.support_agent_rounded,
+                title: isRider ? "Partner Support & FAQs" : "Customer Support & FAQs",
+                subtitle: "Live chat & support tickets",
+                onTap: () {
+                  Navigator.pushNamed(context, RouteGenerator.customerSupport);
+                },
+              ),
+              const Divider(height: 1, indent: 56),
+              SwitchListTile(
+                secondary: Container(
+                  padding: const EdgeInsets.all(AppTokens.s8),
+                  decoration: BoxDecoration(
+                    color: AppTokens.primary.withValues(alpha: 0.08),
+                    borderRadius: BorderRadius.circular(AppTokens.rMd),
                   ),
-                  borderRadius: BorderRadius.circular(16),
-                  boxShadow: [
-                    BoxShadow(
-                      color: Colors.red.shade200.withValues(alpha: 0.6),
-                      blurRadius: 16,
-                      offset: const Offset(0, 6),
-                    ),
-                  ],
+                  child: const Icon(Icons.notifications_active_outlined, color: AppTokens.primary, size: 20),
                 ),
-                child: Material(
-                  color: Colors.transparent,
-                  child: InkWell(
-                    borderRadius: BorderRadius.circular(16),
-                    onTap: () => _confirmLogout(authProvider),
-                    child: const Padding(
-                      padding: EdgeInsets.symmetric(vertical: 16),
-                      child: Row(
-                        mainAxisAlignment: MainAxisAlignment.center,
-                        children: [
-                          Icon(Icons.logout_rounded, color: Colors.white, size: 20),
-                          SizedBox(width: 10),
-                          Text(
-                            "Log Out",
-                            style: TextStyle(
-                              color: Colors.white,
-                              fontWeight: FontWeight.bold,
-                              fontSize: 15,
-                              letterSpacing: 0.3,
-                            ),
-                          ),
-                        ],
+                title: const Text(
+                  "Order Notifications",
+                  style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14),
+                ),
+                subtitle: Text(
+                  isRider ? "Alerts for new assigned orders & updates" : "Push alerts for delivery status updates",
+                  style: TextStyle(fontSize: 12, color: scheme.onSurfaceVariant),
+                ),
+                activeThumbColor: AppTokens.primary,
+                value: user.notificationsEnabled,
+                onChanged: (enabled) {
+                  Provider.of<ProfileProvider>(context, listen: false).setNotificationsEnabled(enabled);
+                },
+              ),
+              const Divider(height: 1, indent: 56),
+              _buildMenuTile(
+                icon: Icons.share_outlined,
+                title: "Share J C Mart",
+                subtitle: "Invite friends & family",
+                onTap: _shareInvite,
+              ),
+              const Divider(height: 1, indent: 56),
+              _buildMenuTile(
+                icon: Icons.gavel_outlined,
+                title: "Terms & Conditions",
+                subtitle: "Service terms & guidelines",
+                onTap: () {
+                  Navigator.pushNamed(context, RouteGenerator.termsConditions);
+                },
+              ),
+              const Divider(height: 1, indent: 56),
+              _buildMenuTile(
+                icon: Icons.privacy_tip_outlined,
+                title: "Privacy Policy & App Info",
+                subtitle: "Data protection & version details",
+                onTap: () {
+                  Navigator.pushNamed(context, RouteGenerator.privacyPolicy);
+                },
+              ),
+            ]),
+
+            const SizedBox(height: AppTokens.s24),
+
+            // 5. Log Out & Account Deletion Actions
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: AppTokens.s20),
+              child: Column(
+                children: [
+                  SizedBox(
+                    width: double.infinity,
+                    child: TextButton.icon(
+                      style: TextButton.styleFrom(
+                        padding: const EdgeInsets.symmetric(vertical: 14),
+                        foregroundColor: AppTokens.statusCancelled,
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(AppTokens.rLg)),
                       ),
+                      icon: const Icon(Icons.logout_rounded, size: 20),
+                      label: const Text(
+                        "Log Out",
+                        style: TextStyle(
+                          fontWeight: FontWeight.bold,
+                          fontSize: 15,
+                        ),
+                      ),
+                      onPressed: () => _confirmLogout(authProvider),
                     ),
                   ),
-                ),
+                  const SizedBox(height: 8),
+                  SizedBox(
+                    width: double.infinity,
+                    child: TextButton.icon(
+                      style: TextButton.styleFrom(
+                        padding: const EdgeInsets.symmetric(vertical: 14),
+                        foregroundColor: scheme.error,
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(AppTokens.rLg)),
+                      ),
+                      icon: const Icon(Icons.delete_forever_rounded, size: 20),
+                      label: const Text(
+                        "Delete Account",
+                        style: TextStyle(
+                          fontWeight: FontWeight.bold,
+                          fontSize: 14,
+                        ),
+                      ),
+                      onPressed: () => _confirmDeleteAccount(authProvider),
+                    ),
+                  ),
+                ],
               ),
             ),
-            const SizedBox(height: 48),
+
+            // Bottom padding to ensure buttons clear bottom navbar cleanly
+            const SizedBox(height: 120.0),
           ],
         ),
       ),
     );
   }
 
-  String _formatMemberSince(DateTime date) {
-    const months = [
-      'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
-      'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec',
-    ];
-    return '${months[date.month - 1]} ${date.year}';
-  }
+  // Smooth, Clean Profile Card
+  Widget _buildCleanProfileCard(UserModel user, {bool isRider = false}) {
+    final scheme = Theme.of(context).colorScheme;
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: AppTokens.s20),
+      child: Container(
+        padding: const EdgeInsets.all(AppTokens.s20),
+        decoration: BoxDecoration(
+          color: scheme.surface,
+          borderRadius: BorderRadius.circular(AppTokens.rXl),
+          border: Border.all(color: scheme.outlineVariant),
+          boxShadow: AppTokens.shadowSm(Colors.black),
+        ),
+        child: Column(
+          children: [
+            Row(
+              children: [
+                Stack(
+                  children: [
+                    Container(
+                      width: 68,
+                      height: 68,
+                      decoration: BoxDecoration(
+                        shape: BoxShape.circle,
+                        color: scheme.surfaceContainerLowest,
+                        border: Border.all(color: AppTokens.primary.withValues(alpha: 0.2), width: 2),
+                      ),
+                      child: ClipOval(
+                        child: user.avatarUrl != null && user.avatarUrl!.isNotEmpty
+                            ? (user.avatarUrl!.startsWith('http')
+                                ? Image.network(
+                                    user.avatarUrl!,
+                                    fit: BoxFit.cover,
+                                    errorBuilder: (c, e, s) => _buildPlaceholderAvatar(),
+                                  )
+                                : Image.file(
+                                    File(user.avatarUrl!),
+                                    fit: BoxFit.cover,
+                                    errorBuilder: (c, e, s) => _buildPlaceholderAvatar(),
+                                  ))
+                            : _buildPlaceholderAvatar(),
+                      ),
+                    ),
+                    Positioned(
+                      bottom: 0,
+                      right: 0,
+                      child: GestureDetector(
+                        onTap: () => _showAvatarPicker(user),
+                        child: Container(
+                          padding: const EdgeInsets.all(5),
+                          decoration: const BoxDecoration(
+                            color: AppTokens.primary,
+                            shape: BoxShape.circle,
+                          ),
+                          child: Icon(
+                            Icons.camera_alt_rounded,
+                            size: 12,
+                            color: scheme.onPrimary,
+                          ),
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(width: AppTokens.s16),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        user.name.isNotEmpty ? user.name : (isRider ? "Delivery Partner" : "J C Mart Customer"),
+                        style: Theme.of(context).textTheme.titleLarge?.copyWith(
+                          color: scheme.onSurface,
+                        ),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                      const SizedBox(height: 2),
+                      Text(
+                        user.phone.isNotEmpty ? user.phone : (user.email.isNotEmpty ? user.email : "No Contact Linked"),
+                        style: TextStyle(color: scheme.onSurfaceVariant, fontSize: 13),
+                      ),
+                      if (user.village.isNotEmpty) ...[
+                        const SizedBox(height: 6),
+                        Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            const Icon(Icons.location_on_outlined, size: 14, color: AppTokens.primary),
+                            const SizedBox(width: 3),
+                            Flexible(
+                              child: Text(
+                                user.village,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: const TextStyle(
+                                  color: AppTokens.primary,
+                                  fontSize: 12,
+                                  fontWeight: FontWeight.w600,
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ],
+                    ],
+                  ),
+                ),
+                if (!isRider)
+                  IconButton(
+                    icon: const Icon(Icons.edit_outlined, color: AppTokens.primary, size: 20),
+                    onPressed: () => _showEditProfileDialog(user),
+                  ),
+              ],
+            ),
+            const SizedBox(height: AppTokens.s16),
+            const Divider(height: 1),
+            const SizedBox(height: 14),
 
-  Widget _buildPlaceholderAvatar() {
-    return Container(
-      color: Colors.green.shade50,
-      child: Center(
-        child: Icon(
-          Icons.person_rounded,
-          size: 48,
-          color: Colors.green.shade300,
+            if (isRider)
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+                decoration: BoxDecoration(
+                  color: AppTokens.primary.withValues(alpha: 0.08),
+                  borderRadius: BorderRadius.circular(AppTokens.rMd),
+                ),
+                child: const Row(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    Icon(Icons.two_wheeler_rounded, color: AppTokens.primary, size: 20),
+                    SizedBox(width: 8),
+                    Text(
+                      "Verified Delivery Partner",
+                      style: TextStyle(
+                        fontSize: 13,
+                        fontWeight: FontWeight.bold,
+                        color: AppTokens.primary,
+                      ),
+                    ),
+                  ],
+                ),
+              )
+            else
+              // Clean 2-Column Stats (Orders & Saved Addresses)
+              Row(
+                children: [
+                  Expanded(
+                    child: Column(
+                      children: [
+                        Text(
+                          "${user.totalOrders}",
+                          style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: AppTokens.primary),
+                        ),
+                        const SizedBox(height: 2),
+                        Text(
+                          "Total Orders",
+                          style: TextStyle(fontSize: 11, color: scheme.onSurfaceVariant),
+                        ),
+                      ],
+                    ),
+                  ),
+                  Container(height: 28, width: 1, color: scheme.outlineVariant),
+                  Expanded(
+                    child: Column(
+                      children: [
+                        Text(
+                          "${user.addresses.length}",
+                          style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: AppTokens.primary),
+                        ),
+                        const SizedBox(height: 2),
+                        Text(
+                          "Saved Addresses",
+                          style: TextStyle(fontSize: 11, color: scheme.onSurfaceVariant),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+          ],
         ),
       ),
     );
   }
 
   Widget _buildSectionHeader(String title) {
+    final scheme = Theme.of(context).colorScheme;
     return Padding(
-      padding: const EdgeInsets.only(left: 24.0, bottom: 10.0, top: 12.0),
+      padding: const EdgeInsets.only(left: AppTokens.s24, bottom: AppTokens.s8),
       child: Text(
         title,
-        style: const TextStyle(fontSize: 14, fontWeight: FontWeight.bold, color: Colors.black54),
+        style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: scheme.onSurfaceVariant, letterSpacing: 0.8),
+      ),
+    );
+  }
+
+  Widget _buildCardContainer(List<Widget> children) {
+    final scheme = Theme.of(context).colorScheme;
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: AppTokens.s20),
+      child: Container(
+        decoration: BoxDecoration(
+          color: scheme.surface,
+          borderRadius: BorderRadius.circular(AppTokens.rXl),
+          border: Border.all(color: scheme.outlineVariant),
+          boxShadow: AppTokens.shadowSm(Colors.black),
+        ),
+        child: Column(children: children),
       ),
     );
   }
@@ -673,14 +684,54 @@ class _UserProfileScreenState extends State<UserProfileScreen> {
     required IconData icon,
     required String title,
     String? subtitle,
+    String? badgeText,
     required VoidCallback onTap,
   }) {
+    final scheme = Theme.of(context).colorScheme;
     return ListTile(
-      leading: Icon(icon, color: Colors.green.shade700),
-      title: Text(title, style: const TextStyle(fontWeight: FontWeight.w500, fontSize: 14)),
-      subtitle: subtitle != null ? Text(subtitle, style: const TextStyle(fontSize: 12, color: Colors.grey)) : null,
-      trailing: const Icon(Icons.arrow_forward_ios_rounded, size: 14, color: Colors.grey),
+      leading: Container(
+        padding: const EdgeInsets.all(AppTokens.s8),
+        decoration: BoxDecoration(
+          color: AppTokens.primary.withValues(alpha: 0.08),
+          borderRadius: BorderRadius.circular(AppTokens.rMd),
+        ),
+        child: Icon(icon, color: AppTokens.primary, size: 20),
+      ),
+      title: Text(title, style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14, color: scheme.onSurface)),
+      subtitle: subtitle != null ? Text(subtitle, style: TextStyle(fontSize: 12, color: scheme.onSurfaceVariant)) : null,
+      trailing: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          if (badgeText != null)
+            Container(
+              margin: const EdgeInsets.only(right: AppTokens.s8),
+              padding: const EdgeInsets.symmetric(horizontal: AppTokens.s8, vertical: AppTokens.s4),
+              decoration: BoxDecoration(
+                color: AppTokens.primary.withValues(alpha: 0.15),
+                borderRadius: BorderRadius.circular(AppTokens.rPill),
+              ),
+              child: Text(
+                badgeText,
+                style: const TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: AppTokens.primary),
+              ),
+            ),
+          Icon(Icons.arrow_forward_ios_rounded, size: 14, color: scheme.onSurfaceVariant),
+        ],
+      ),
       onTap: onTap,
+    );
+  }
+
+  Widget _buildPlaceholderAvatar() {
+    return Container(
+      color: AppTokens.primary.withValues(alpha: 0.08),
+      child: const Center(
+        child: Icon(
+          Icons.person_rounded,
+          size: 36,
+          color: AppTokens.primary,
+        ),
+      ),
     );
   }
 }
@@ -710,54 +761,74 @@ class _ActiveOrderBanner extends StatelessWidget {
         final extra = active.length - 1;
 
         return Padding(
-          padding: const EdgeInsets.fromLTRB(20, 16, 20, 0),
+          padding: const EdgeInsets.symmetric(horizontal: AppTokens.s20),
           child: Material(
             color: Colors.transparent,
             child: InkWell(
-              borderRadius: BorderRadius.circular(16),
-              onTap: () => Navigator.push(
+              borderRadius: BorderRadius.circular(AppTokens.rLg),
+              onTap: () => Navigator.pushNamed(
                 context,
-                MaterialPageRoute(
-                  builder: (_) => OrderTrackingScreen(orderId: latest.id),
-                ),
+                RouteGenerator.orderTracking,
+                arguments: latest.id,
               ),
               child: Container(
                 padding: const EdgeInsets.all(14),
                 decoration: BoxDecoration(
-                  gradient: LinearGradient(
-                    colors: [Colors.green.shade600, Colors.green.shade400],
+                  gradient: const LinearGradient(
+                    colors: [Color(0xFF16A34A), Color(0xFF0D9488)],
                     begin: Alignment.topLeft,
                     end: Alignment.bottomRight,
                   ),
-                  borderRadius: BorderRadius.circular(16),
+                  borderRadius: BorderRadius.circular(AppTokens.rLg),
+                  boxShadow: AppTokens.shadowMd(AppTokens.primary),
                 ),
                 child: Row(
                   children: [
-                    const Icon(Icons.local_shipping_rounded, color: Colors.white, size: 26),
-                    const SizedBox(width: 12),
+                    Container(
+                      padding: const EdgeInsets.all(AppTokens.s8),
+                      decoration: BoxDecoration(
+                        color: Colors.white.withValues(alpha: 0.2),
+                        shape: BoxShape.circle,
+                      ),
+                      child: const Icon(Icons.delivery_dining_rounded, color: Colors.white, size: 24),
+                    ),
+                    const SizedBox(width: AppTokens.s12),
                     Expanded(
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          Text(
-                            extra > 0
-                                ? "$extra more order${extra > 1 ? 's' : ''} in progress"
-                                : "Order in progress",
-                            style: const TextStyle(
-                              color: Colors.white,
-                              fontWeight: FontWeight.bold,
-                              fontSize: 14,
-                            ),
+                          Row(
+                            children: [
+                              Text(
+                                extra > 0
+                                    ? "$extra more order${extra > 1 ? 's' : ''} in progress"
+                                    : "Active Order in Progress",
+                                style: const TextStyle(
+                                  color: Colors.white,
+                                  fontWeight: FontWeight.bold,
+                                  fontSize: 13,
+                                ),
+                              ),
+                              const SizedBox(width: AppTokens.s8),
+                              Container(
+                                width: 8,
+                                height: 8,
+                                decoration: const BoxDecoration(
+                                  color: AppTokens.brandChrome,
+                                  shape: BoxShape.circle,
+                                ),
+                              ),
+                            ],
                           ),
                           const SizedBox(height: 2),
                           Text(
-                            "#${latest.id.substring(0, latest.id.length < 6 ? latest.id.length : 6).toUpperCase()} · Tap to track",
-                            style: const TextStyle(color: Colors.white70, fontSize: 12),
+                            "#${latest.id.substring(0, latest.id.length < 6 ? latest.id.length : 6).toUpperCase()} · Tap to track status",
+                            style: const TextStyle(color: Colors.white70, fontSize: 11),
                           ),
                         ],
                       ),
                     ),
-                    const Icon(Icons.arrow_forward_ios_rounded, color: Colors.white, size: 16),
+                    const Icon(Icons.arrow_forward_ios_rounded, color: Colors.white, size: 14),
                   ],
                 ),
               ),

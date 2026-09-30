@@ -7,8 +7,8 @@ import '../../../core/providers/auth_provider.dart';
 import '../../../core/providers/cart_provider.dart';
 import '../../../core/providers/product_provider.dart';
 import '../../../core/providers/profile_provider.dart';
+import '../../../core/utils/route_generator.dart';
 import '../../../domain/entities/product.dart';
-import '../../customer/screens/product_details_screen.dart';
 
 class WishlistScreen extends StatefulWidget {
   const WishlistScreen({super.key});
@@ -21,17 +21,18 @@ class _WishlistScreenState extends State<WishlistScreen> {
   @override
   Widget build(BuildContext context) {
     final favoriteIds = context.watch<AuthProvider>().currentUserModel?.favoriteProductIds ?? const [];
-    final cart = context.read<CartProvider>();
+    final cart = context.watch<CartProvider>();
+    final scheme = Theme.of(context).colorScheme;
 
     return Scaffold(
-      backgroundColor: Colors.grey.shade50,
+      backgroundColor: scheme.surfaceContainerLowest,
       appBar: AppBar(
         title: const Text(
           "Your Wishlist",
           style: TextStyle(fontWeight: FontWeight.bold, fontSize: 18),
         ),
-        backgroundColor: Colors.white,
-        foregroundColor: Colors.black87,
+        backgroundColor: scheme.surface,
+        foregroundColor: scheme.onSurface,
         elevation: 0.5,
         leading: IconButton(
           icon: const Icon(Icons.arrow_back_ios_new_rounded, size: 20),
@@ -47,8 +48,15 @@ class _WishlistScreenState extends State<WishlistScreen> {
           : StreamBuilder<List<Product>>(
               stream: context.read<ProductProvider>().streamProducts(),
               builder: (context, snapshot) {
-                if (snapshot.connectionState == ConnectionState.waiting) {
-                  return const Center(child: CircularProgressIndicator());
+                if (snapshot.hasError) {
+                  return const EmptyState(
+                    icon: Icons.error_outline_rounded,
+                    title: "Couldn't load your wishlist",
+                    message: 'Check your connection and try again.',
+                  );
+                }
+                if (snapshot.connectionState == ConnectionState.waiting && !snapshot.hasData) {
+                  return Center(child: CircularProgressIndicator(color: scheme.primary));
                 }
                 final favorites = (snapshot.data ?? [])
                     .where((p) => favoriteIds.contains(p.id))
@@ -66,15 +74,14 @@ class _WishlistScreenState extends State<WishlistScreen> {
                   padding: const EdgeInsets.all(AppTokens.s16),
                   gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
                     crossAxisCount: 2,
-                    childAspectRatio: 0.72,
+                    childAspectRatio: 0.65,
                     crossAxisSpacing: AppTokens.s16,
                     mainAxisSpacing: AppTokens.s16,
                   ),
                   itemCount: favorites.length,
                   itemBuilder: (context, index) {
                     final product = favorites[index];
-                    final inCartQty = context
-                        .select<CartProvider, int>((c) => c.quantityOf(product.id));
+                    final inCartQty = cart.quantityOf(product.id);
 
                     return Stack(
                       children: [
@@ -83,18 +90,17 @@ class _WishlistScreenState extends State<WishlistScreen> {
                           quantityInCart: inCartQty,
                           onAdd: () => cart.addItem(product),
                           onRemove: () => cart.decrementItem(product.id),
-                          onTap: () => Navigator.push(
+                          onTap: () => Navigator.pushNamed(
                             context,
-                            MaterialPageRoute(
-                              builder: (_) => ProductDetailsScreen(product: product),
-                            ),
+                            RouteGenerator.productDetails,
+                            arguments: product,
                           ),
                         ),
                         Positioned(
                           top: AppTokens.s8,
                           right: AppTokens.s8,
                           child: Material(
-                            color: Colors.white,
+                            color: scheme.surface,
                             shape: const CircleBorder(),
                             elevation: 2,
                             child: InkWell(

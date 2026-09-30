@@ -3,8 +3,8 @@ import 'package:flutter/services.dart';
 import '../../../core/design/app_tokens.dart';
 import '../../../core/design/widgets/biometric_reveal.dart';
 import '../../../core/providers/order_provider.dart';
+import '../../../core/utils/route_generator.dart';
 import 'package:provider/provider.dart';
-import 'order_tracking_screen.dart';
 
 /// Displayed immediately after a successful order placement.
 /// Shows an animated checkmark, the delivery OTP, and navigation CTAs.
@@ -208,12 +208,10 @@ class _OrderSuccessScreenState extends State<OrderSuccessScreen>
                         width: double.infinity,
                         child: FilledButton.icon(
                           onPressed: () {
-                            Navigator.pushReplacement(
+                            Navigator.pushReplacementNamed(
                               context,
-                              MaterialPageRoute(
-                                builder: (_) => OrderTrackingScreen(
-                                    orderId: widget.orderId),
-                              ),
+                              RouteGenerator.orderTracking,
+                              arguments: widget.orderId,
                             );
                           },
                           icon: const Icon(Icons.location_on_rounded),

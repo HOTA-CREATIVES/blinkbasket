@@ -1,7 +1,7 @@
 import { createRiderLogin } from "../src/index";
 import { getFirestore } from "firebase-admin/firestore";
 import { getAuth } from "firebase-admin/auth";
-import { clearFirestore, callableRequest } from "./testUtils";
+import { clearAuth, clearFirestore, callableRequest } from "./testUtils";
 
 const db = getFirestore();
 const auth = getAuth();
@@ -13,6 +13,7 @@ async function seedAdmin(uid: string, overrides: Record<string, unknown> = {}) {
 describe("createRiderLogin", () => {
   beforeEach(async () => {
     await clearFirestore();
+    await clearAuth();
   });
 
   it("rejects a non-admin caller", async () => {

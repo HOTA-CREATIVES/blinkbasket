@@ -53,11 +53,10 @@ class _BiometricRevealState extends State<BiometricReveal> {
             const SizedBox(width: 6),
             Text(
               _authenticating ? 'Verifying…' : 'Tap to reveal OTP',
-              style: TextStyle(
-                color: scheme.primary,
-                fontWeight: FontWeight.w700,
-                fontSize: 13,
-              ),
+              style: Theme.of(context)
+                  .textTheme
+                  .bodySmall
+                  ?.copyWith(color: scheme.primary, fontWeight: FontWeight.w700),
             ),
           ],
         ),

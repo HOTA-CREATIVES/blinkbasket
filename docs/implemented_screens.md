@@ -34,13 +34,14 @@ flowchart TD
     subgraph Customer Screens [Customer Portal]
         CustomerHome -->|Tab 0| StoreTab[Shop Grid]
         StoreTab -->|Tap Search Bar| SearchScreen[SearchScreen]
+        CustomerHome -->|Header Profile Avatar| ProfileTab[UserProfileScreen]
         CustomerHome -->|Tab 1| CartTab[CartScreen]
         CustomerHome -->|Tab 2| OrdersTab[OrderHistoryScreen]
-        CustomerHome -->|Tab 3| ProfileTab[UserProfileScreen]
         ProfileTab -->|Wishlist| WishlistScreen[WishlistScreen]
         
-        CartTab -->|Pick Location| LocationPicker[LeafletLocationPicker]
-        CartTab -->|Place Order COD| SuccessScreen[OrderSuccessScreen]
+        CartTab -->|Proceed to Checkout| CheckoutScreen[CheckoutScreen]
+        CheckoutScreen -->|Pin Location| LocationPicker[LeafletLocationPicker]
+        CheckoutScreen -->|Swipe to Confirm| SuccessScreen[OrderSuccessScreen]
         OrdersTab -->|Click Active Order| TrackingScreen[OrderTrackingScreen]
         TrackingScreen -->|Delivered| RateReorder[Rate & Reorder]
     end
@@ -125,26 +126,40 @@ flowchart TD
 
 ## 2. Customer Portal Screens
 
-### A. Customer Home Screen (`CustomerHomeScreen`)
+### A. Customer HomeScreen (`CustomerHomeScreen`)
 * **Path**: [customer_home_screen.dart](file:///c:/Users/gurun/Documents/PROJECTS/hota-projects/hypermart/lib/modules/customer/screens/customer_home_screen.dart)
 * **Role**: Customer
-* **Layout Design**: Four-tab primary interface utilizing an `IndexedStack` to maintain state across tabs, coupled with a premium floating navigation bottom bar with smooth micro-shadows.
-* **Tabs & Components**:
-  * **Store Tab**: Includes a top location display banner ("Deliver to: Village"), search text field, horizontal scrolling category chips, and a dual-column `GridView` of product cards.
+* **Layout Design**: Three-tab primary interface utilizing an `IndexedStack` to maintain state across tabs, coupled with a modern **Floating Bottom Navigation Bar (`FloatingNavbar`)**.
+* **Floating Navbar Geometry & Design**:
+  * Occupies **~70% of total screen width**, horizontally centered above the bottom safe area.
+  * Rounded pill container (`BorderRadius.circular(32)`) with multi-layered elevation shadows and outline border.
+  * Micro-animations: `AnimatedContainer` active pill highlight, `AnimatedScale` icon pop (1.15x scale), and animated text weight/color transitions.
+  * Header avatar button in top green header opens `UserProfileScreen`.
+* **Tabs**:
+  * **Store Tab**: Includes a top location banner ("Deliver to: Village"), search text field, category chips, and a dual-column `GridView` of product cards.
   * **Cart Tab**: Opens `CartScreen`.
   * **My Orders Tab**: Opens `OrderHistoryScreen`.
-  * **Profile Tab**: Opens `UserProfileScreen`.
-* **Features**:
-  * Incremental quantity stepper integrated directly into product cards.
-  * Floating checkout summary panel shown when the cart is non-empty.
 
-### B. Cart & Checkout Screen (`CartScreen`)
+### B. Cart Screen (`CartScreen`)
 * **Path**: [cart_screen.dart](file:///c:/Users/gurun/Documents/PROJECTS/hota-projects/hypermart/lib/modules/customer/screens/cart_screen.dart)
 * **Role**: Customer
 * **Features**:
-  * Detailed item list with item adjustments and clear-all option.
-  * Saved address dropdown + **Interactive Leaflet Map Location Picker** (`LeafletLocationPicker`) allowing coordinate pin selection.
-  * Client-side fee estimator showing delivery charge thresholds.
+  * Detailed item list with quantity steppers and clear cart options.
+  * Saved address selector with fixed instance equality checks (`operator ==` & `hashCode` on `AddressModel`).
+  * Free delivery progress nudge indicator.
+  * **Proceed to Checkout** button navigating to `CheckoutScreen`.
+
+### C. Dedicated Checkout Screen (`CheckoutScreen`)
+* **Path**: [checkout_screen.dart](file:///c:/Users/gurun/Documents/PROJECTS/hota-projects/hypermart/lib/modules/customer/screens/checkout_screen.dart)
+* **Role**: Customer
+* **Features**:
+  * **⚡ 20-Min Flash Delivery Banner**: Prominent green gradient banner guaranteeing 15–20 minute delivery ETA.
+  * **Delivery Address & Contact Details**: Formatted customer name, phone number, street address input, and interactive map location pin action via `LeafletLocationPicker`.
+  * **Order Items Summary**: Lists items, thumbnails, quantities, price calculations, and prescription verification notice for medicines.
+  * **Special Delivery Instructions**: Dedicated textfield for custom rider notes.
+  * **Payment Options**: Selection between Cash on Delivery (COD) and Scan & Pay via UPI on Arrival.
+  * **Detailed Bill Breakdown**: Item Subtotal, Delivery Fee (with FREE delivery thresholds), Taxes & Packaging Fee (₹5), and Grand Total.
+  * **Explicit Swipe-to-Confirm Slider**: `SwipeToConfirmSlider` widget enforces explicit user swipe action to place order, preventing accidental orders.
 
 ### C. Order Success Screen (`OrderSuccessScreen`)
 * **Path**: [order_success_screen.dart](file:///c:/Users/gurun/Documents/PROJECTS/hota-projects/hypermart/lib/modules/customer/screens/order_success_screen.dart)
@@ -210,15 +225,15 @@ flowchart TD
 * **Role**: Delivery Rider
 * **Layout Design**: Focused, details-rich layout displaying order metadata.
 * **Features**:
-  * **Items Checklist**: Renders a checklist of products in the order, allowing the rider to check off items as they verify packaging.
-  * **Action Controls**: Navigation shortcut (launches external mapping app), Call Customer button, and a Contact Dispatch shortcut to the admin-configured support phone number (hidden if unset).
+  * **Items Checklist & Pre-Delivery Verification**: Renders a checklist of products in the order, allowing the rider to check off items as they verify packaging. Prompts a confirmation dialog before transitioning to `delivered` status if items remain unchecked.
+  * **Action Controls & Error Handling**: Navigation shortcut (launches external mapping app), Call Customer button, and a Contact Dispatch shortcut to the admin-configured support phone number. Displays graceful fallback messages if map or phone launcher applications are unavailable on the device.
   * **Cash Collection Banner**: Large highlighted card summarizing COD cash held.
   * **Swipe-to-Confirm Slider**: Horizontal slider to transition order status accepting, starting, and verifying delivery.
 
 ### C. Rider Map Screen (`RiderMapScreen`)
 * **Path**: [rider_map_screen.dart](file:///c:/Users/gurun/Documents/PROJECTS/hota-projects/hypermart/lib/modules/delivery/screens/rider_map_screen.dart)
 * **Role**: Delivery Rider
-* **Layout Design**: Full-screen interactive map centered on Bhimavaram.
+* **Layout Design**: Full-screen interactive map centered on Bhimavaram with StreamBuilder error state handling.
 * **Features**:
   * **Order Pins**: Places active customer destination locations on the map as custom orange pin markers.
   * **Contextual Sheet**: Tapping a pin highlights the location and opens a bottom details card with order summaries and a shortcut button to `TaskDetailScreen`.
@@ -228,7 +243,7 @@ flowchart TD
 * **Role**: Delivery Rider
 * **Layout Design**: Operational ledger screen tracking stats and cash holding.
 * **Features**:
-  * **Total Payout Card**: Sums completed runs at a flat ₹30 per run delivery fee share.
+  * **Total Payout Card**: Sums completed runs at a flat admin-configurable per-run delivery fee share (e.g. ₹30/run).
   * **COD Cash Counter**: Displays total Cash-on-Delivery collections held in hand by the rider to remit to Admin HQ.
   * **Performance Metrics**: Counts completed vs. cancelled runs.
   * **Daily Runs Logs**: Historical logs timeline showing completed timestamps.
@@ -238,6 +253,7 @@ flowchart TD
 * **Role**: Delivery Rider / Customer Verification
 * **Features**:
   * Four separate numeric boxes with auto-focus shifting (advances on input, moves back on backspace).
+  * Auto-clears invalid OTP server errors when rider starts typing new digits.
   * Shakes inputs and displays red outlines on invalid OTP entry.
 
 ---

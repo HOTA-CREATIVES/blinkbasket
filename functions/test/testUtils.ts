@@ -13,6 +13,16 @@ export async function clearFirestore(): Promise<void> {
   }
 }
 
+/** Wipes all Auth emulator accounts (Firestore wipes don't touch Auth). */
+export async function clearAuth(): Promise<void> {
+  const res = await fetch(`http://localhost:9099/emulator/v1/projects/${PROJECT_ID}/accounts`, {
+    method: "DELETE",
+  });
+  if (!res.ok) {
+    throw new Error(`Failed to clear Auth emulator: ${res.status} ${await res.text()}`);
+  }
+}
+
 /** Builds a minimal CallableRequest for exercising an onCall function's .run(). */
 export function callableRequest<T>(
   data: T,

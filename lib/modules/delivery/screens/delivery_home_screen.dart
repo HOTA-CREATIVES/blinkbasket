@@ -8,10 +8,10 @@ import '../../../core/providers/auth_provider.dart';
 import '../../../core/providers/order_provider.dart';
 import '../../../domain/entities/order.dart';
 import '../../../core/models/user_model.dart';
+import '../../../core/utils/route_generator.dart';
 import '../../profile/screens/user_profile_screen.dart';
 import 'rider_map_screen.dart';
 import 'earnings_screen.dart';
-import 'task_detail_screen.dart';
 
 class DeliveryHomeScreen extends StatefulWidget {
   const DeliveryHomeScreen({super.key});
@@ -91,160 +91,111 @@ class _DeliveryHomeScreenState extends State<DeliveryHomeScreen> {
     );
   }
 
-  Widget _buildActionPanel(BuildContext context, UserModel user,
+  Widget _buildRiderHeaderCard(BuildContext context, UserModel user,
       OrderProvider orderProvider, ColorScheme scheme) {
+    final isOnDuty = user.onDuty;
     return Container(
-      color: Colors.white,
-      padding: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 12.0),
-      child: Column(
+      margin: const EdgeInsets.fromLTRB(AppTokens.s16, AppTokens.s12, AppTokens.s16, AppTokens.s4),
+      padding: const EdgeInsets.symmetric(horizontal: AppTokens.s16, vertical: 10.0),
+      decoration: BoxDecoration(
+        color: scheme.surface,
+        borderRadius: BorderRadius.circular(AppTokens.rLg),
+        border: Border.all(
+          color: isOnDuty
+              ? AppTokens.primary.withValues(alpha: 0.3)
+              : scheme.outlineVariant,
+        ),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.04),
+            blurRadius: 10,
+            offset: const Offset(0, 3),
+          ),
+        ],
+      ),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.spaceBetween,
         children: [
-          Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          // Flexible + Expanded below: the name/village column had no width
+          // limit next to the duty switch and overflowed on long names.
+          Flexible(
+            child: Row(
             children: [
-              Row(
+              Container(
+                width: 42,
+                height: 42,
+                decoration: BoxDecoration(
+                  color: (isOnDuty ? AppTokens.primary : scheme.onSurfaceVariant)
+                      .withValues(alpha: 0.1),
+                  shape: BoxShape.circle,
+                ),
+                child: Icon(
+                  Icons.delivery_dining_rounded,
+                  color: isOnDuty ? AppTokens.primary : scheme.onSurfaceVariant,
+                  size: 24,
+                ),
+              ),
+              const SizedBox(width: AppTokens.s12),
+              Expanded(
+                child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  CircleAvatar(
-                    backgroundColor: scheme.primary.withValues(alpha: 0.1),
-                    child: Icon(Icons.delivery_dining_rounded, color: scheme.primary),
+                  Text(
+                    user.name,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 15),
                   ),
-                  const SizedBox(width: 12),
-                  Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
+                  const SizedBox(height: 2),
+                  Row(
                     children: [
+                      const Icon(Icons.location_on_outlined,
+                          size: 13, color: AppTokens.primary),
+                      const SizedBox(width: 2),
                       Text(
-                        user.name,
-                        style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14),
-                      ),
-                      const SizedBox(height: 2),
-                      Text(
-                        'Region: ${user.village}',
-                        style: TextStyle(color: Colors.grey.shade600, fontSize: 12),
+                        user.village.isNotEmpty ? user.village : 'Bhimavaram',
+                        style: TextStyle(
+                            fontSize: 12,
+                            color: scheme.onSurfaceVariant,
+                            fontWeight: FontWeight.w500),
                       ),
                     ],
                   ),
                 ],
               ),
-              Row(
-                children: [
-                  Text(
-                    user.onDuty ? 'On duty' : 'Off duty',
-                    style: TextStyle(
-                      fontWeight: FontWeight.bold,
-                      fontSize: 12,
-                      color: user.onDuty ? Colors.green.shade700 : Colors.grey,
-                    ),
-                  ),
-                  Switch(
-                    value: user.onDuty,
-                    activeColor: Colors.green,
-                    onChanged: (val) async {
-                      await orderProvider.updateDeliveryBoyDutyStatus(user.uid, val);
-                      if (context.mounted) {
-                        await Provider.of<AuthProvider>(context, listen: false).reloadUserProfile();
-                      }
-                    },
-                  ),
-                ],
               ),
             ],
           ),
-          const SizedBox(height: 12),
+          ),
           Row(
             children: [
-              // Live Map Button
-              Expanded(
-                child: InkWell(
-                  onTap: () {
-                    setState(() {
-                      _currentIndex = 1;
-                    });
-                  },
-                  child: Card(
-                    elevation: 0,
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(AppTokens.rSm),
-                      side: BorderSide(color: Colors.grey.shade200),
-                    ),
-                    color: Colors.green.shade50.withValues(alpha: 0.2),
-                    child: const Padding(
-                      padding: EdgeInsets.symmetric(vertical: 12.0),
-                      child: Column(
-                        children: [
-                          Icon(Icons.map_rounded, color: Colors.green, size: 24),
-                          SizedBox(height: 4),
-                          Text(
-                            'Live Map',
-                            style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13, color: Colors.green),
-                          ),
-                        ],
-                      ),
-                    ),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                decoration: BoxDecoration(
+                  color: (isOnDuty ? AppTokens.statusDelivered : scheme.onSurfaceVariant)
+                      .withValues(alpha: 0.12),
+                  borderRadius: BorderRadius.circular(AppTokens.rPill),
+                ),
+                child: Text(
+                  isOnDuty ? 'ON DUTY' : 'OFF DUTY',
+                  style: TextStyle(
+                    fontSize: 10,
+                    fontWeight: FontWeight.w800,
+                    color: isOnDuty ? AppTokens.statusDelivered : scheme.onSurfaceVariant,
+                    letterSpacing: 0.5,
                   ),
                 ),
               ),
-              const SizedBox(width: 8),
-              // Earnings Button
-              Expanded(
-                child: InkWell(
-                  onTap: () {
-                    setState(() {
-                      _currentIndex = 2;
-                    });
-                  },
-                  child: Card(
-                    elevation: 0,
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(AppTokens.rSm),
-                      side: BorderSide(color: Colors.grey.shade200),
-                    ),
-                    color: Colors.blue.shade50.withValues(alpha: 0.2),
-                    child: const Padding(
-                      padding: EdgeInsets.symmetric(vertical: 12.0),
-                      child: Column(
-                        children: [
-                          Icon(Icons.currency_rupee_rounded, color: Colors.blue, size: 24),
-                          SizedBox(height: 4),
-                          Text(
-                            'Earnings',
-                            style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13, color: Colors.blue),
-                          ),
-                        ],
-                      ),
-                    ),
-                  ),
-                ),
-              ),
-              const SizedBox(width: 8),
-              // Profile Button
-              Expanded(
-                child: InkWell(
-                  onTap: () {
-                    setState(() {
-                      _currentIndex = 3;
-                    });
-                  },
-                  child: Card(
-                    elevation: 0,
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(AppTokens.rSm),
-                      side: BorderSide(color: Colors.grey.shade200),
-                    ),
-                    color: Colors.orange.shade50.withValues(alpha: 0.2),
-                    child: const Padding(
-                      padding: EdgeInsets.symmetric(vertical: 12.0),
-                      child: Column(
-                        children: [
-                          Icon(Icons.person_rounded, color: Colors.orange, size: 24),
-                          SizedBox(height: 4),
-                          Text(
-                            'Profile',
-                            style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13, color: Colors.orange),
-                          ),
-                        ],
-                      ),
-                    ),
-                  ),
-                ),
+              const SizedBox(width: 4),
+              Switch(
+                value: user.onDuty,
+                activeThumbColor: AppTokens.primary,
+                onChanged: (val) async {
+                  await orderProvider.updateDeliveryBoyDutyStatus(user.uid, val);
+                  if (context.mounted) {
+                    await Provider.of<AuthProvider>(context, listen: false).reloadUserProfile();
+                  }
+                },
               ),
             ],
           ),
@@ -258,9 +209,17 @@ class _DeliveryHomeScreenState extends State<DeliveryHomeScreen> {
     return StreamBuilder<List<Order>>(
       stream: orderProvider.streamDeliveryBoyOrders(user.uid),
       builder: (context, snapshot) {
-        if (snapshot.connectionState == ConnectionState.waiting) {
+        if (snapshot.connectionState == ConnectionState.waiting && !snapshot.hasData) {
           return const Scaffold(body: SkeletonList());
         }
+        if (snapshot.hasError) {
+          return EmptyState(
+            icon: Icons.error_outline_rounded,
+            title: 'Unable to load tasks',
+            message: snapshot.error.toString(),
+          );
+        }
+
         final allOrders = snapshot.data ?? [];
         final activeOrders = allOrders
             .where((o) => o.status != 'delivered' && o.status != 'cancelled')
@@ -271,7 +230,7 @@ class _DeliveryHomeScreenState extends State<DeliveryHomeScreen> {
 
         return Column(
           children: [
-            _buildActionPanel(context, user, orderProvider, scheme),
+            _buildRiderHeaderCard(context, user, orderProvider, scheme),
             _buildIncomingOffersSection(context, user, orderProvider, scheme),
             Expanded(
               child: DefaultTabController(
@@ -311,6 +270,8 @@ class _DeliveryHomeScreenState extends State<DeliveryHomeScreen> {
     return StreamBuilder<List<Order>>(
       stream: orderProvider.streamIncomingOffers(),
       builder: (context, snapshot) {
+        if (snapshot.hasError) return const SizedBox.shrink();
+
         final offers = (snapshot.data ?? [])
             .where((o) => !_dismissedOfferIds.contains(o.id))
             .toList()
@@ -325,30 +286,56 @@ class _DeliveryHomeScreenState extends State<DeliveryHomeScreen> {
 
         if (offers.isEmpty) return const SizedBox.shrink();
 
+        // Compact vertical rows instead of a fixed-height horizontal
+        // carousel: scales to any offer count without hiding extras
+        // off-screen with no indication more exist, and — since this
+        // section sits above a non-scrolling Expanded tab view — height
+        // must stay capped regardless of how many offers arrive at once.
+        // A ~2.5-row cap leaves the next row peeking as a scroll hint.
+        const tileHeight = 92.0;
+        const tileGap = AppTokens.s8;
+        final listHeight = offers.length <= 2
+            ? offers.length * tileHeight + (offers.length - 1) * tileGap
+            : 2.5 * tileHeight + 2 * tileGap;
+
         return Container(
-          padding: const EdgeInsets.only(top: AppTokens.s12, bottom: AppTokens.s4),
+          padding: const EdgeInsets.symmetric(horizontal: AppTokens.s16, vertical: AppTokens.s12),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Padding(
-                padding: const EdgeInsets.symmetric(horizontal: AppTokens.s16),
-                child: Text(
-                  'Incoming Offers',
-                  style: TextStyle(
-                    fontWeight: FontWeight.w800,
-                    fontSize: 14,
-                    color: scheme.onSurfaceVariant,
+              Row(
+                children: [
+                  Text(
+                    'Incoming Offers',
+                    style: TextStyle(
+                      fontWeight: FontWeight.w800,
+                      fontSize: 14,
+                      color: scheme.onSurfaceVariant,
+                    ),
                   ),
-                ),
+                  const SizedBox(width: AppTokens.s8),
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                    decoration: BoxDecoration(
+                      color: scheme.primary,
+                      borderRadius: BorderRadius.circular(AppTokens.rPill),
+                    ),
+                    child: Text(
+                      '${offers.length}',
+                      semanticsLabel: '${offers.length} incoming offers',
+                      style: Theme.of(context).textTheme.labelSmall?.copyWith(color: scheme.onPrimary, fontWeight: FontWeight.w800),
+                    ),
+                  ),
+                ],
               ),
               const SizedBox(height: AppTokens.s8),
               SizedBox(
-                height: 200,
-                child: ListView.builder(
-                  scrollDirection: Axis.horizontal,
-                  padding: const EdgeInsets.symmetric(horizontal: AppTokens.s16),
+                height: listHeight,
+                child: ListView.separated(
+                  padding: EdgeInsets.zero,
                   itemCount: offers.length,
-                  itemBuilder: (context, index) => _buildOfferCard(
+                  separatorBuilder: (_, __) => const SizedBox(height: tileGap),
+                  itemBuilder: (context, index) => _buildOfferTile(
                       context, offers[index], orderProvider, user, scheme),
                 ),
               ),
@@ -359,125 +346,176 @@ class _DeliveryHomeScreenState extends State<DeliveryHomeScreen> {
     );
   }
 
-  Widget _buildOfferCard(BuildContext context, Order order,
+  Widget _buildOfferTile(BuildContext context, Order order,
       OrderProvider orderProvider, UserModel user, ColorScheme scheme) {
     final isLocal =
         order.village.trim().toLowerCase() == user.village.trim().toLowerCase();
+    final zoneColor = isLocal ? AppTokens.statusDelivered : AppTokens.statusAssigned;
     bool isAccepting = false;
 
+    final itemsSummary = order.items.isNotEmpty
+        ? order.items.map((i) => '${i.quantity}x ${i.name}').join(', ')
+        : 'No items';
+
     return StatefulBuilder(
-      builder: (context, setCardState) {
-        return Container(
-          width: 240,
-          margin: const EdgeInsets.only(right: AppTokens.s12),
-          padding: const EdgeInsets.all(AppTokens.s12),
-          decoration: BoxDecoration(
-            color: scheme.surface,
-            borderRadius: BorderRadius.circular(AppTokens.rMd),
-            border: Border.all(color: scheme.primary.withValues(alpha: 0.3)),
-            boxShadow: [
-              BoxShadow(
-                color: Colors.black.withValues(alpha: 0.05),
-                blurRadius: 10,
-                offset: const Offset(0, 4),
-              ),
-            ],
-          ),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Row(
-                children: [
-                  Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-                    decoration: BoxDecoration(
-                      color: (isLocal ? AppTokens.statusDelivered : AppTokens.statusAssigned)
-                          .withValues(alpha: 0.12),
-                      borderRadius: BorderRadius.circular(AppTokens.rPill),
-                    ),
-                    child: Text(
-                      isLocal ? 'Local' : 'Wide search',
-                      style: TextStyle(
-                        fontSize: 10,
-                        fontWeight: FontWeight.bold,
-                        color: isLocal ? AppTokens.statusDelivered : AppTokens.statusAssigned,
-                      ),
-                    ),
+      builder: (context, setTileState) {
+        return Semantics(
+          container: true,
+          label: 'Order from ${order.customerName}, $itemsSummary, '
+              '₹${order.totalAmount.toStringAsFixed(0)} cash on delivery, '
+              '${isLocal ? "local order" : "nearby zone"}',
+          child: Container(
+            padding: const EdgeInsets.all(10),
+            decoration: BoxDecoration(
+              color: scheme.surface,
+              borderRadius: BorderRadius.circular(AppTokens.rMd),
+              border: Border.all(color: zoneColor.withValues(alpha: 0.35), width: 1.2),
+              boxShadow: [
+                BoxShadow(
+                  color: scheme.onSurface.withValues(alpha: 0.05),
+                  blurRadius: 8,
+                  offset: const Offset(0, 2),
+                ),
+              ],
+            ),
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Container(
+                  padding: const EdgeInsets.all(6),
+                  decoration: BoxDecoration(color: zoneColor.withValues(alpha: 0.12), shape: BoxShape.circle),
+                  child: Icon(
+                    isLocal ? Icons.near_me_rounded : Icons.explore_outlined,
+                    size: 16,
+                    color: zoneColor,
                   ),
-                  const Spacer(),
-                  Text('${order.items.length} item${order.items.length == 1 ? '' : 's'}',
-                      style: TextStyle(color: scheme.onSurfaceVariant, fontSize: 11)),
-                ],
-              ),
-              const SizedBox(height: AppTokens.s8),
-              Text(order.customerName,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14)),
-              const SizedBox(height: 2),
-              Text(order.village,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: TextStyle(color: scheme.onSurfaceVariant, fontSize: 12)),
-              const Spacer(),
-              Text('₹${order.totalAmount.toStringAsFixed(2)} (COD)',
-                  style: TextStyle(
-                      fontWeight: FontWeight.w800, fontSize: 15, color: scheme.primary)),
-              const SizedBox(height: AppTokens.s8),
-              Row(
-                children: [
-                  Expanded(
-                    child: OutlinedButton(
-                      onPressed: isAccepting
-                          ? null
-                          : () => setState(() => _dismissedOfferIds.add(order.id)),
-                      style: OutlinedButton.styleFrom(
-                        padding: const EdgeInsets.symmetric(vertical: 8),
-                        minimumSize: Size.zero,
+                ),
+                const SizedBox(width: AppTokens.s8),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        children: [
+                          Expanded(
+                            child: Text(
+                              order.customerName,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: Theme.of(context).textTheme.bodyMedium?.copyWith(fontWeight: FontWeight.bold),
+                            ),
+                          ),
+                          Text(
+                            '${order.items.length} item${order.items.length == 1 ? '' : 's'}',
+                            style: Theme.of(context).textTheme.labelSmall?.copyWith(color: scheme.onSurfaceVariant, fontWeight: FontWeight.w600),
+                          ),
+                        ],
                       ),
-                      child: const Text('Reject', style: TextStyle(fontSize: 12)),
-                    ),
-                  ),
-                  const SizedBox(width: AppTokens.s8),
-                  Expanded(
-                    child: ElevatedButton(
-                      onPressed: isAccepting
-                          ? null
-                          : () async {
-                              setCardState(() => isAccepting = true);
-                              final error = await orderProvider.acceptOrder(order.id);
-                              if (!context.mounted) return;
-                              if (error != null) {
-                                setCardState(() => isAccepting = false);
-                                ScaffoldMessenger.of(context).showSnackBar(
-                                  SnackBar(
-                                    content: Text(error),
-                                    backgroundColor: AppTokens.statusCancelled,
-                                  ),
-                                );
-                              }
-                              // On success the order drops off streamIncomingOffers
-                              // on its own (deliveryBoyId is now set) — no local
-                              // state change needed here.
-                            },
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: scheme.primary,
-                        foregroundColor: Colors.white,
-                        padding: const EdgeInsets.symmetric(vertical: 8),
-                        minimumSize: Size.zero,
+                      const SizedBox(height: 2),
+                      Text(
+                        '${order.deliveryAddress}, ${order.village}',
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(fontSize: 11.5, color: scheme.onSurfaceVariant),
                       ),
-                      child: isAccepting
-                          ? const SizedBox(
-                              width: 14,
-                              height: 14,
-                              child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
-                            )
-                          : const Text('Accept', style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold)),
-                    ),
+                      const SizedBox(height: 2),
+                      Text(
+                        itemsSummary,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: Theme.of(context).textTheme.labelSmall?.copyWith(color: scheme.onSurfaceVariant, fontStyle: FontStyle.italic),
+                      ),
+                    ],
                   ),
-                ],
-              ),
-            ],
+                ),
+                const SizedBox(width: AppTokens.s8),
+                Column(
+                  crossAxisAlignment: CrossAxisAlignment.end,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text(
+                      '₹${order.totalAmount.toStringAsFixed(0)}',
+                      style: TextStyle(fontWeight: FontWeight.w900, fontSize: 15, color: scheme.primary),
+                    ),
+                    const SizedBox(height: 6),
+                    Row(
+                      children: [
+                        SizedBox(
+                          width: 40,
+                          height: 40,
+                          child: IconButton(
+                            padding: EdgeInsets.zero,
+                            tooltip: 'Reject offer',
+                            onPressed: isAccepting
+                                ? null
+                                : () => setState(() => _dismissedOfferIds.add(order.id)),
+                            icon: Icon(Icons.close_rounded, size: 18, color: scheme.onSurfaceVariant),
+                            style: IconButton.styleFrom(
+                              backgroundColor: scheme.surfaceContainerHighest,
+                              shape: const CircleBorder(),
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 6),
+                        SizedBox(
+                          height: 40,
+                          child: ElevatedButton(
+                            onPressed: isAccepting
+                                ? null
+                                : () async {
+                                    setTileState(() => isAccepting = true);
+                                    try {
+                                      final error = await orderProvider.acceptOrder(order.id);
+                                      if (!context.mounted) return;
+                                      // Always clear the spinner here, on
+                                      // success too — don't rely solely on
+                                      // this tile getting removed once the
+                                      // offers stream catches up, or a slow
+                                      // snapshot (or the order somehow still
+                                      // matching the query) leaves the rider
+                                      // staring at a spinner that never ends.
+                                      setTileState(() => isAccepting = false);
+                                      if (error != null) {
+                                        ScaffoldMessenger.of(context).showSnackBar(
+                                          SnackBar(
+                                            content: Text(error),
+                                            backgroundColor: AppTokens.statusCancelled,
+                                          ),
+                                        );
+                                      }
+                                    } catch (e) {
+                                      if (!context.mounted) return;
+                                      setTileState(() => isAccepting = false);
+                                      ScaffoldMessenger.of(context).showSnackBar(
+                                        SnackBar(
+                                          content: Text('Failed to accept order: $e'),
+                                          backgroundColor: AppTokens.statusCancelled,
+                                        ),
+                                      );
+                                    }
+                                  },
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: scheme.primary,
+                              foregroundColor: scheme.onPrimary,
+                              padding: const EdgeInsets.symmetric(horizontal: AppTokens.s16),
+                              minimumSize: Size.zero,
+                              elevation: 0,
+                            ),
+                            child: isAccepting
+                                ? SizedBox(
+                                    width: 14,
+                                    height: 14,
+                                    child: CircularProgressIndicator(strokeWidth: 2, color: scheme.onPrimary),
+                                  )
+                                : Text('Accept', style: Theme.of(context).textTheme.labelMedium?.copyWith(fontWeight: FontWeight.bold)),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
+              ],
+            ),
           ),
         );
       },
@@ -494,7 +532,7 @@ class _DeliveryHomeScreenState extends State<DeliveryHomeScreen> {
       );
     }
     return ListView.builder(
-      padding: const EdgeInsets.fromLTRB(AppTokens.s16, AppTokens.s16, AppTokens.s16, 100),
+      padding: const EdgeInsets.fromLTRB(AppTokens.s16, AppTokens.s16, AppTokens.s16, 120),
       itemCount: orders.length,
       itemBuilder: (context, i) =>
           _buildActiveTaskCard(context, orders[i], orderProvider, scheme),
@@ -507,9 +545,10 @@ class _DeliveryHomeScreenState extends State<DeliveryHomeScreen> {
       margin: const EdgeInsets.only(bottom: AppTokens.s16),
       child: InkWell(
         onTap: () {
-          Navigator.push(
+          Navigator.pushNamed(
             context,
-            MaterialPageRoute(builder: (_) => TaskDetailScreen(order: order)),
+            RouteGenerator.taskDetail,
+            arguments: order,
           );
         },
         borderRadius: BorderRadius.circular(AppTokens.rMd),
@@ -559,24 +598,25 @@ class _DeliveryHomeScreenState extends State<DeliveryHomeScreen> {
                           fontSize: 14)),
                 ]),
               ),
-              const SizedBox(height: 12),
+          const SizedBox(height: AppTokens.s12),
               SizedBox(
                 width: double.infinity,
                 child: ElevatedButton.icon(
                   onPressed: () {
-                    Navigator.push(
+                    Navigator.pushNamed(
                       context,
-                      MaterialPageRoute(builder: (_) => TaskDetailScreen(order: order)),
+                      RouteGenerator.taskDetail,
+                      arguments: order,
                     );
                   },
                   icon: const Icon(Icons.arrow_forward_rounded, size: 16),
                   label: const Text('VIEW TASK DETAILS', style: TextStyle(fontWeight: FontWeight.bold)),
                   style: ElevatedButton.styleFrom(
                     backgroundColor: scheme.primary,
-                    foregroundColor: Colors.white,
+                    foregroundColor: scheme.onPrimary,
                     elevation: 0,
                     shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(AppTokens.rSm)),
-                    padding: const EdgeInsets.symmetric(vertical: 12),
+                    padding: const EdgeInsets.symmetric(vertical: AppTokens.s12),
                   ),
                 ),
               ),
@@ -632,7 +672,7 @@ class _DeliveryHomeScreenState extends State<DeliveryHomeScreen> {
         borderRadius: BorderRadius.circular(36),
         boxShadow: [
           BoxShadow(
-            color: Colors.black.withValues(alpha: 0.1),
+            color: scheme.onSurface.withValues(alpha: 0.1),
             blurRadius: 16,
             offset: const Offset(0, 8),
           ),
@@ -686,8 +726,7 @@ class _DeliveryHomeScreenState extends State<DeliveryHomeScreen> {
             const SizedBox(height: 4),
             Text(
               label,
-              style: TextStyle(
-                fontSize: 11,
+              style: Theme.of(context).textTheme.labelSmall?.copyWith(
                 fontWeight: isActive ? FontWeight.bold : FontWeight.normal,
                 color: isActive ? scheme.primary : scheme.onSurfaceVariant,
               ),

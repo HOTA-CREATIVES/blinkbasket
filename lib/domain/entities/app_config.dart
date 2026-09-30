@@ -1,3 +1,5 @@
+import 'service_zone.dart';
+
 class AppConfig {
   final bool storeOpen;
   final double deliveryFee;
@@ -12,6 +14,15 @@ class AppConfig {
   final double minimumOrderAmount;
   final int maxOrdersPerSlot;
 
+  /// Admin-editable legal text (Store Settings). When null/blank the bundled
+  /// default pages are shown instead.
+  final String? privacyPolicy;
+  final String? termsAndConditions;
+
+  /// Admin-configurable delivery zone circles. When non-empty this list
+  /// replaces the static [Villages] hardcodes everywhere in the app.
+  final List<ServiceZone> serviceZones;
+
   AppConfig({
     required this.storeOpen,
     required this.deliveryFee,
@@ -25,5 +36,8 @@ class AppConfig {
     this.maintenanceMode = false,
     this.minimumOrderAmount = 0.0,
     this.maxOrdersPerSlot = 20,
+    this.serviceZones = const [],
+    this.privacyPolicy,
+    this.termsAndConditions,
   });
 }

@@ -19,7 +19,15 @@ class _StoreSettingsScreenState extends State<StoreSettingsScreen> {
   final _riderPayoutController = TextEditingController();
   final _supportPhoneController = TextEditingController();
   final _supportWhatsappController = TextEditingController();
+  final _minimumOrderController = TextEditingController();
+  final _privacyController = TextEditingController();
+  final _termsController = TextEditingController();
   bool _storeOpen = true;
+  bool _maintenanceMode = false;
+  // The config as last loaded — fields this screen doesn't edit (service
+  // zones, slot limit) are carried through on save. Rebuilding AppConfig from
+  // only the form fields used to reset them to defaults / wipe the zone list.
+  AppConfig? _loadedConfig;
   bool _isSaving = false;
   bool _configLoaded = false;
   final _categoryInputController = TextEditingController();
@@ -33,6 +41,9 @@ class _StoreSettingsScreenState extends State<StoreSettingsScreen> {
     _riderPayoutController.dispose();
     _supportPhoneController.dispose();
     _supportWhatsappController.dispose();
+    _minimumOrderController.dispose();
+    _privacyController.dispose();
+    _termsController.dispose();
     _categoryInputController.dispose();
     super.dispose();
   }
@@ -59,9 +70,16 @@ class _StoreSettingsScreenState extends State<StoreSettingsScreen> {
       final fee = double.parse(_deliveryFeeController.text.trim());
       final threshold = double.parse(_freeDeliveryController.text.trim());
       final payout = double.parse(_riderPayoutController.text.trim());
+      final minimumOrder = double.tryParse(_minimumOrderController.text.trim()) ?? 0.0;
 
       final config = AppConfig(
         storeOpen: _storeOpen,
+        maintenanceMode: _maintenanceMode,
+        minimumOrderAmount: minimumOrder,
+        maxOrdersPerSlot: _loadedConfig?.maxOrdersPerSlot ?? 20,
+        serviceZones: _loadedConfig?.serviceZones ?? const [],
+        privacyPolicy: _privacyController.text.trim().isEmpty ? null : _privacyController.text.trim(),
+        termsAndConditions: _termsController.text.trim().isEmpty ? null : _termsController.text.trim(),
         deliveryFee: fee,
         freeDeliveryAbove: threshold,
         updatedAt: DateTime.now(),
@@ -85,7 +103,7 @@ class _StoreSettingsScreenState extends State<StoreSettingsScreen> {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
             content: Text('Store settings updated successfully!', style: TextStyle(fontWeight: FontWeight.bold)),
-            backgroundColor: Colors.green,
+            backgroundColor: AppTokens.statusDelivered,
             behavior: SnackBarBehavior.floating,
           ),
         );
@@ -120,14 +138,14 @@ class _StoreSettingsScreenState extends State<StoreSettingsScreen> {
     final scheme = Theme.of(context).colorScheme;
 
     return Scaffold(
-      backgroundColor: Colors.grey.shade50,
+      backgroundColor: Theme.of(context).colorScheme.surfaceContainerLow,
       appBar: AppBar(
         title: const Text(
           'Store Configurations',
           style: TextStyle(fontWeight: FontWeight.bold, fontSize: 18),
         ),
-        backgroundColor: Colors.white,
-        foregroundColor: Colors.black87,
+        backgroundColor: Theme.of(context).colorScheme.surface,
+        foregroundColor: Theme.of(context).colorScheme.onSurface,
         elevation: 0.5,
         leading: IconButton(
           icon: const Icon(Icons.arrow_back_ios_new_rounded, size: 20),
@@ -138,7 +156,7 @@ class _StoreSettingsScreenState extends State<StoreSettingsScreen> {
         stream: Provider.of<ConfigProvider>(context, listen: false).streamAppConfig(),
         builder: (context, snapshot) {
           if (snapshot.connectionState == ConnectionState.waiting) {
-            return const Center(child: CircularProgressIndicator(color: Colors.blue));
+            return Center(child: CircularProgressIndicator(color: scheme.primary));
           }
 
           if (snapshot.hasData) {
@@ -146,7 +164,14 @@ class _StoreSettingsScreenState extends State<StoreSettingsScreen> {
             // Populate form once when stream emits first time
             if (!_configLoaded) {
               _configLoaded = true;
+              _loadedConfig = config;
+              _privacyController.text = config.privacyPolicy ?? '';
+              _termsController.text = config.termsAndConditions ?? '';
               _storeOpen = config.storeOpen;
+              _maintenanceMode = config.maintenanceMode;
+              _minimumOrderController.text = config.minimumOrderAmount == 0
+                  ? ''
+                  : config.minimumOrderAmount.toString();
               _deliveryFeeController.text = config.deliveryFee.toString();
               _freeDeliveryController.text = config.freeDeliveryAbove.toString();
               _etaLabelController.text = config.etaLabel ?? '';
@@ -169,48 +194,54 @@ class _StoreSettingsScreenState extends State<StoreSettingsScreen> {
                     elevation: 0,
                     shape: RoundedRectangleBorder(
                       borderRadius: BorderRadius.circular(AppTokens.rMd),
-                      side: BorderSide(color: Colors.grey.shade200),
+                      side: BorderSide(color: Theme.of(context).colorScheme.outlineVariant),
                     ),
-                    color: Colors.white,
-                    child: Padding(
-                      padding: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 12.0),
-                      child: Row(
-                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                        children: [
-                          Row(
-                            children: [
-                              Icon(
-                                Icons.store_mall_directory_rounded,
-                                color: _storeOpen ? Colors.green : Colors.grey,
-                                size: 24,
-                              ),
-                              const SizedBox(width: 12),
-                              Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  const Text(
-                                    'Store Status',
-                                    style: TextStyle(fontWeight: FontWeight.bold, fontSize: 15),
-                                  ),
-                                  const SizedBox(height: 2),
-                                  Text(
-                                    _storeOpen ? 'Accepting Customer Orders' : 'Store is Closed (No Checkout)',
-                                    style: TextStyle(color: Colors.grey.shade600, fontSize: 12),
-                                  ),
-                                ],
-                              ),
-                            ],
-                          ),
-                          Switch(
-                            value: _storeOpen,
-                            activeColor: Colors.green,
-                            onChanged: (val) {
-                              setState(() {
-                                _storeOpen = val;
-                              });
-                            },
-                          ),
-                        ],
+                    color: Theme.of(context).colorScheme.surface,
+                    // SwitchListTile instead of a hand-rolled Row: the old
+                    // Row(icon+Column, Switch) had no Expanded and overflowed
+                    // on narrow phones.
+                    child: SwitchListTile(
+                      value: _storeOpen,
+                      activeThumbColor: Colors.green,
+                      onChanged: (val) => setState(() => _storeOpen = val),
+                      secondary: Icon(
+                        Icons.store_mall_directory_rounded,
+                        color: _storeOpen ? AppTokens.statusDelivered : Theme.of(context).colorScheme.onSurfaceVariant,
+                        size: 24,
+                      ),
+                      title: const Text(
+                        'Store Status',
+                        style: TextStyle(fontWeight: FontWeight.bold, fontSize: 15),
+                      ),
+                      subtitle: Text(
+                        _storeOpen ? 'Accepting Customer Orders' : 'Store is Closed (No Checkout)',
+                        style: TextStyle(color: Theme.of(context).colorScheme.onSurfaceVariant, fontSize: 12),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+
+                  // Maintenance mode — blocks checkout server-side (placeOrder).
+                  Card(
+                    elevation: 0,
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(AppTokens.rMd),
+                      side: BorderSide(color: Theme.of(context).colorScheme.outlineVariant),
+                    ),
+                    color: Theme.of(context).colorScheme.surface,
+                    child: SwitchListTile(
+                      value: _maintenanceMode,
+                      onChanged: (val) => setState(() => _maintenanceMode = val),
+                      secondary: Icon(Icons.build_circle_outlined, color: scheme.primary),
+                      title: const Text(
+                        'Maintenance Mode',
+                        style: TextStyle(fontWeight: FontWeight.bold, fontSize: 15),
+                      ),
+                      subtitle: Text(
+                        _maintenanceMode
+                            ? 'Checkout is blocked for customers'
+                            : 'Off — orders are accepted normally',
+                        style: TextStyle(color: scheme.onSurfaceVariant, fontSize: 12),
                       ),
                     ),
                   ),
@@ -221,9 +252,9 @@ class _StoreSettingsScreenState extends State<StoreSettingsScreen> {
                     elevation: 0,
                     shape: RoundedRectangleBorder(
                       borderRadius: BorderRadius.circular(AppTokens.rMd),
-                      side: BorderSide(color: Colors.grey.shade200),
+                      side: BorderSide(color: Theme.of(context).colorScheme.outlineVariant),
                     ),
-                    color: Colors.white,
+                    color: Theme.of(context).colorScheme.surface,
                     child: Padding(
                       padding: const EdgeInsets.all(20.0),
                       child: Column(
@@ -233,9 +264,11 @@ class _StoreSettingsScreenState extends State<StoreSettingsScreen> {
                             children: [
                               Icon(Icons.delivery_dining_rounded, color: scheme.primary),
                               const SizedBox(width: 8),
-                              const Text(
-                                'Delivery Logistics Surcharges',
-                                style: TextStyle(fontWeight: FontWeight.bold, fontSize: 15),
+                              const Expanded(
+                                child: Text(
+                                  'Delivery Logistics Surcharges',
+                                  style: TextStyle(fontWeight: FontWeight.bold, fontSize: 15),
+                                ),
                               ),
                             ],
                           ),
@@ -281,6 +314,26 @@ class _StoreSettingsScreenState extends State<StoreSettingsScreen> {
                           ),
                           const SizedBox(height: 20),
 
+                          // Minimum order amount field (0 / empty = no minimum)
+                          TextFormField(
+                            controller: _minimumOrderController,
+                            keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                            decoration: InputDecoration(
+                              labelText: 'Minimum Order Amount (₹, optional)',
+                              prefixIcon: const Icon(Icons.shopping_cart_checkout_rounded, size: 18),
+                              border: OutlineInputBorder(
+                                borderRadius: BorderRadius.circular(AppTokens.rSm),
+                              ),
+                            ),
+                            validator: (val) {
+                              if (val == null || val.trim().isEmpty) return null;
+                              final num = double.tryParse(val.trim());
+                              if (num == null || num < 0) return 'Enter a valid non-negative number';
+                              return null;
+                            },
+                          ),
+                          const SizedBox(height: 20),
+
                           // Rider payout field
                           TextFormField(
                             controller: _riderPayoutController,
@@ -302,7 +355,68 @@ class _StoreSettingsScreenState extends State<StoreSettingsScreen> {
                           const SizedBox(height: 8),
                           Text(
                             'Applies going forward only — past deliveries keep their original payout.',
-                            style: TextStyle(color: Colors.grey.shade600, fontSize: 12),
+                            style: TextStyle(color: Theme.of(context).colorScheme.onSurfaceVariant, fontSize: 12),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 20),
+
+                  // Legal pages — shown to customers under Profile. Blank keeps
+                  // the built-in default text.
+                  Card(
+                    elevation: 0,
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(AppTokens.rMd),
+                      side: BorderSide(color: Theme.of(context).colorScheme.outlineVariant),
+                    ),
+                    color: Theme.of(context).colorScheme.surface,
+                    child: Padding(
+                      padding: const EdgeInsets.all(20.0),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Row(
+                            children: [
+                              Icon(Icons.gavel_rounded, color: scheme.primary),
+                              const SizedBox(width: 8),
+                              const Expanded(
+                                child: Text(
+                                  'Legal Pages',
+                                  style: TextStyle(fontWeight: FontWeight.bold, fontSize: 15),
+                                ),
+                              ),
+                            ],
+                          ),
+                          const SizedBox(height: 4),
+                          Text(
+                            'Leave a box empty to use the built-in text. Put a blank line between paragraphs and start a line with # for a heading.',
+                            style: TextStyle(color: scheme.onSurfaceVariant, fontSize: 12),
+                          ),
+                          const Divider(height: 24),
+                          TextFormField(
+                            controller: _privacyController,
+                            minLines: 4,
+                            maxLines: 10,
+                            maxLength: 20000,
+                            decoration: InputDecoration(
+                              labelText: 'Privacy Policy',
+                              alignLabelWithHint: true,
+                              border: OutlineInputBorder(borderRadius: BorderRadius.circular(AppTokens.rSm)),
+                            ),
+                          ),
+                          const SizedBox(height: 12),
+                          TextFormField(
+                            controller: _termsController,
+                            minLines: 4,
+                            maxLines: 10,
+                            maxLength: 20000,
+                            decoration: InputDecoration(
+                              labelText: 'Terms & Conditions',
+                              alignLabelWithHint: true,
+                              border: OutlineInputBorder(borderRadius: BorderRadius.circular(AppTokens.rSm)),
+                            ),
                           ),
                         ],
                       ),
@@ -315,9 +429,9 @@ class _StoreSettingsScreenState extends State<StoreSettingsScreen> {
                     elevation: 0,
                     shape: RoundedRectangleBorder(
                       borderRadius: BorderRadius.circular(AppTokens.rMd),
-                      side: BorderSide(color: Colors.grey.shade200),
+                      side: BorderSide(color: Theme.of(context).colorScheme.outlineVariant),
                     ),
-                    color: Colors.white,
+                    color: Theme.of(context).colorScheme.surface,
                     child: Padding(
                       padding: const EdgeInsets.all(20.0),
                       child: Column(
@@ -327,9 +441,11 @@ class _StoreSettingsScreenState extends State<StoreSettingsScreen> {
                             children: [
                               Icon(Icons.support_agent_rounded, color: scheme.primary),
                               const SizedBox(width: 8),
-                              const Text(
-                                'Support Contact',
-                                style: TextStyle(fontWeight: FontWeight.bold, fontSize: 15),
+                              const Expanded(
+                                child: Text(
+                                  'Support Contact',
+                                  style: TextStyle(fontWeight: FontWeight.bold, fontSize: 15),
+                                ),
                               ),
                             ],
                           ),
@@ -362,7 +478,7 @@ class _StoreSettingsScreenState extends State<StoreSettingsScreen> {
                           const SizedBox(height: 8),
                           Text(
                             'Shown as tap-to-contact actions for customers and riders. Leave blank to hide.',
-                            style: TextStyle(color: Colors.grey.shade600, fontSize: 12),
+                            style: TextStyle(color: Theme.of(context).colorScheme.onSurfaceVariant, fontSize: 12),
                           ),
                         ],
                       ),
@@ -375,9 +491,9 @@ class _StoreSettingsScreenState extends State<StoreSettingsScreen> {
                     elevation: 0,
                     shape: RoundedRectangleBorder(
                       borderRadius: BorderRadius.circular(AppTokens.rMd),
-                      side: BorderSide(color: Colors.grey.shade200),
+                      side: BorderSide(color: Theme.of(context).colorScheme.outlineVariant),
                     ),
-                    color: Colors.white,
+                    color: Theme.of(context).colorScheme.surface,
                     child: Padding(
                       padding: const EdgeInsets.all(20.0),
                       child: Column(
@@ -387,9 +503,11 @@ class _StoreSettingsScreenState extends State<StoreSettingsScreen> {
                             children: [
                               Icon(Icons.timer_outlined, color: scheme.primary),
                               const SizedBox(width: 8),
-                              const Text(
-                                'Delivery Time Promise',
-                                style: TextStyle(fontWeight: FontWeight.bold, fontSize: 15),
+                              const Expanded(
+                                child: Text(
+                                  'Delivery Time Promise',
+                                  style: TextStyle(fontWeight: FontWeight.bold, fontSize: 15),
+                                ),
                               ),
                             ],
                           ),
@@ -408,7 +526,7 @@ class _StoreSettingsScreenState extends State<StoreSettingsScreen> {
                           const SizedBox(height: 8),
                           Text(
                             'Shown as a badge on the customer home screen. Leave blank to hide it.',
-                            style: TextStyle(color: Colors.grey.shade600, fontSize: 12),
+                            style: TextStyle(color: Theme.of(context).colorScheme.onSurfaceVariant, fontSize: 12),
                           ),
                         ],
                       ),
@@ -421,9 +539,9 @@ class _StoreSettingsScreenState extends State<StoreSettingsScreen> {
                     elevation: 0,
                     shape: RoundedRectangleBorder(
                       borderRadius: BorderRadius.circular(AppTokens.rMd),
-                      side: BorderSide(color: Colors.grey.shade200),
+                      side: BorderSide(color: Theme.of(context).colorScheme.outlineVariant),
                     ),
-                    color: Colors.white,
+                    color: Theme.of(context).colorScheme.surface,
                     child: Padding(
                       padding: const EdgeInsets.all(20.0),
                       child: Column(
@@ -433,9 +551,11 @@ class _StoreSettingsScreenState extends State<StoreSettingsScreen> {
                             children: [
                               Icon(Icons.category_rounded, color: scheme.primary),
                               const SizedBox(width: 8),
-                              const Text(
-                                'Shop-by-Category Rail',
-                                style: TextStyle(fontWeight: FontWeight.bold, fontSize: 15),
+                              const Expanded(
+                                child: Text(
+                                  'Shop-by-Category Rail',
+                                  style: TextStyle(fontWeight: FontWeight.bold, fontSize: 15),
+                                ),
                               ),
                             ],
                           ),
@@ -467,7 +587,7 @@ class _StoreSettingsScreenState extends State<StoreSettingsScreen> {
                           if (_categories.isEmpty)
                             Text(
                               'No custom categories set — the app shows its built-in defaults.',
-                              style: TextStyle(color: Colors.grey.shade600, fontSize: 12),
+                              style: TextStyle(color: Theme.of(context).colorScheme.onSurfaceVariant, fontSize: 12),
                             )
                           else
                             Wrap(
@@ -500,10 +620,10 @@ class _StoreSettingsScreenState extends State<StoreSettingsScreen> {
                       padding: const EdgeInsets.symmetric(vertical: 16),
                     ),
                     child: _isSaving
-                        ? const SizedBox(
+                        ? SizedBox(
                             width: 20,
                             height: 20,
-                            child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2),
+                            child: CircularProgressIndicator(color: scheme.onPrimary, strokeWidth: 2),
                           )
                         : const Text(
                             'SAVE CONFIGURATIONS',

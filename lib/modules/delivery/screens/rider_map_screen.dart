@@ -6,8 +6,8 @@ import '../../../core/design/app_tokens.dart';
 import '../../../core/design/widgets/status_chip.dart';
 import '../../../core/providers/auth_provider.dart';
 import '../../../core/providers/order_provider.dart';
+import '../../../core/utils/route_generator.dart';
 import '../../../domain/entities/order.dart';
-import 'task_detail_screen.dart';
 
 class RiderMapScreen extends StatefulWidget {
   final bool isEmbedded;
@@ -51,12 +51,12 @@ class _RiderMapScreenState extends State<RiderMapScreen> {
 
     return Scaffold(
       appBar: AppBar(
-        title: const Text(
+        title: Text(
           'Active Deliveries Map',
-          style: TextStyle(fontWeight: FontWeight.bold, fontSize: 18),
+          style: Theme.of(context).textTheme.titleLarge,
         ),
-        backgroundColor: Colors.white,
-        foregroundColor: Colors.black87,
+        backgroundColor: scheme.surface,
+        foregroundColor: scheme.onSurface,
         elevation: 0.5,
         automaticallyImplyLeading: !widget.isEmbedded,
         leading: widget.isEmbedded
@@ -69,8 +69,20 @@ class _RiderMapScreenState extends State<RiderMapScreen> {
       body: StreamBuilder<List<Order>>(
         stream: orderProvider.streamDeliveryBoyOrders(user.uid),
         builder: (context, snapshot) {
-          if (snapshot.connectionState == ConnectionState.waiting) {
-            return const Center(child: CircularProgressIndicator(color: Colors.green));
+          if (snapshot.connectionState == ConnectionState.waiting && !snapshot.hasData) {
+            return Center(child: CircularProgressIndicator(color: scheme.primary));
+          }
+          if (snapshot.hasError) {
+            return Center(
+              child: Padding(
+                padding: const EdgeInsets.all(AppTokens.s20),
+                child: Text(
+                  'Error loading active deliveries on map:\n${snapshot.error}',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(color: scheme.error),
+                ),
+              ),
+            );
           }
 
           final activeOrders = snapshot.data
@@ -129,9 +141,9 @@ class _RiderMapScreenState extends State<RiderMapScreen> {
                     shape: RoundedRectangleBorder(
                       borderRadius: BorderRadius.circular(AppTokens.rLg),
                     ),
-                    color: Colors.white,
+                    color: scheme.surface,
                     child: Padding(
-                      padding: const EdgeInsets.all(16.0),
+                      padding: const EdgeInsets.all(AppTokens.s16),
                       child: Column(
                         mainAxisSize: MainAxisSize.min,
                         crossAxisAlignment: CrossAxisAlignment.start,
@@ -141,7 +153,7 @@ class _RiderMapScreenState extends State<RiderMapScreen> {
                             children: [
                               Text(
                                 'Order #${_selectedOrder!.id.substring(0, 6).toUpperCase()}',
-                                style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
+                                style: Theme.of(context).textTheme.titleMedium,
                               ),
                               StatusChip(status: _selectedOrder!.status),
                             ],
@@ -149,23 +161,27 @@ class _RiderMapScreenState extends State<RiderMapScreen> {
                           const Divider(height: 20),
                           Row(
                             children: [
-                              Icon(Icons.person_outline_rounded, size: 16, color: Colors.grey.shade600),
+                              Icon(Icons.person_outline_rounded, size: 16, color: scheme.onSurfaceVariant),
                               const SizedBox(width: 6),
-                              Text(
-                                _selectedOrder!.customerName,
-                                style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14),
+                              Flexible(
+                                child: Text(
+                                  _selectedOrder!.customerName,
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: Theme.of(context).textTheme.bodyMedium?.copyWith(fontWeight: FontWeight.bold),
+                                ),
                               ),
                             ],
                           ),
                           const SizedBox(height: 6),
                           Row(
                             children: [
-                              Icon(Icons.location_on_outlined, size: 16, color: Colors.grey.shade600),
+                              Icon(Icons.location_on_outlined, size: 16, color: scheme.onSurfaceVariant),
                               const SizedBox(width: 6),
                               Expanded(
                                 child: Text(
                                   '${_selectedOrder!.deliveryAddress}, ${_selectedOrder!.village}',
-                                  style: TextStyle(color: Colors.grey.shade700, fontSize: 13),
+                                  style: TextStyle(color: scheme.onSurfaceVariant, fontSize: 13),
                                   maxLines: 1,
                                   overflow: TextOverflow.ellipsis,
                                 ),
@@ -175,12 +191,12 @@ class _RiderMapScreenState extends State<RiderMapScreen> {
                           const SizedBox(height: 6),
                           Row(
                             children: [
-                              const Icon(Icons.currency_rupee_rounded, size: 16, color: Colors.green),
+                              const Icon(Icons.currency_rupee_rounded, size: 16, color: AppTokens.statusDelivered),
                               const SizedBox(width: 6),
                               Text(
                                 'Collect: ₹${_selectedOrder!.totalAmount.toStringAsFixed(2)}',
                                 style: const TextStyle(
-                                  color: Colors.green,
+                                  color: AppTokens.statusDelivered,
                                   fontWeight: FontWeight.bold,
                                   fontSize: 14,
                                 ),
@@ -194,8 +210,8 @@ class _RiderMapScreenState extends State<RiderMapScreen> {
                                 child: OutlinedButton(
                                   onPressed: () => setState(() => _selectedOrder = null),
                                   style: OutlinedButton.styleFrom(
-                                    foregroundColor: Colors.grey.shade600,
-                                    side: BorderSide(color: Colors.grey.shade300),
+                                    foregroundColor: scheme.onSurfaceVariant,
+                                    side: BorderSide(color: scheme.outlineVariant),
                                     shape: RoundedRectangleBorder(
                                       borderRadius: BorderRadius.circular(AppTokens.rSm),
                                     ),
@@ -203,22 +219,21 @@ class _RiderMapScreenState extends State<RiderMapScreen> {
                                   child: const Text('Dismiss', style: TextStyle(fontWeight: FontWeight.bold)),
                                 ),
                               ),
-                              const SizedBox(width: 12),
+                              const SizedBox(width: AppTokens.s12),
                               Expanded(
                                 child: ElevatedButton(
                                   onPressed: () {
                                     final selected = _selectedOrder!;
                                     setState(() => _selectedOrder = null);
-                                    Navigator.push(
+                                    Navigator.pushNamed(
                                       context,
-                                      MaterialPageRoute(
-                                        builder: (_) => TaskDetailScreen(order: selected),
-                                      ),
+                                      RouteGenerator.taskDetail,
+                                      arguments: selected,
                                     );
                                   },
                                   style: ElevatedButton.styleFrom(
                                     backgroundColor: scheme.primary,
-                                    foregroundColor: Colors.white,
+                                    foregroundColor: scheme.onPrimary,
                                     elevation: 0,
                                     shape: RoundedRectangleBorder(
                                       borderRadius: BorderRadius.circular(AppTokens.rSm),

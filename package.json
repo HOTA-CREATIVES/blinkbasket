@@ -1,0 +1,36 @@
+{
+  "name": "hypermart",
+  "version": "1.0.0",
+  "description": "J C Mart is a production-grade, hyperlocal quick-commerce application built with Flutter and Firebase BaaS. It features real-time inventory adjustments and Cash on Delivery (COD) fulfillment pipelines divided across three user personas: Customers, Delivery Partners, and Store Admins.",
+  "main": "index.js",
+  "directories": {
+    "doc": "docs",
+    "lib": "lib",
+    "test": "test"
+  },
+  "scripts": {
+    "build:web": "flutter build web --dart-define=USE_FIREBASE_EMULATOR=true",
+    "emulators": "firebase emulators:start --only auth,firestore,functions",
+    "seed": "node scripts/seed.js",
+    "test:e2e": "playwright test",
+    "test:e2e:ui": "playwright test --ui",
+    "test:report": "playwright show-report"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/HOTA-CREATIVES/blinkbasket.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/HOTA-CREATIVES/blinkbasket/issues"
+  },
+  "homepage": "https://github.com/HOTA-CREATIVES/blinkbasket#readme",
+  "devDependencies": {
+    "@playwright/test": "^1.62.1",
+    "@types/node": "^26.2.0",
+    "serve": "^14.2.6",
+    "typescript": "^7.0.2"
+  }
+}

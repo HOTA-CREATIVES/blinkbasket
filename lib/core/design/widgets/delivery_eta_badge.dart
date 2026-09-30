@@ -61,12 +61,11 @@ class DeliveryEtaBadge extends StatelessWidget {
               const SizedBox(width: 4),
               Text(
                 label,
-                style: TextStyle(
-                  fontSize: 10,
-                  fontWeight: FontWeight.w800,
-                  color: textColor,
-                  letterSpacing: 0.2,
-                ),
+                style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                      fontSize: 10,
+                      color: textColor,
+                      letterSpacing: 0.2,
+                    ),
               ),
             ],
           ),

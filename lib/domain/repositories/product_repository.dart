@@ -19,5 +19,6 @@ abstract class ProductRepository {
     required String changeType,
     required String notes,
     required String adminId,
+    String actorType = 'admin',
   });
 }

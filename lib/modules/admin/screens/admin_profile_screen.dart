@@ -1,14 +1,13 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
+import 'package:package_info_plus/package_info_plus.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:hypermart/core/utils/route_generator.dart';
 import '../../../core/providers/auth_provider.dart';
 import '../../../core/providers/theme_provider.dart';
 import '../../../core/providers/config_provider.dart';
+import '../../../core/design/app_tokens.dart';
 import '../../../domain/entities/dashboard_stats.dart';
-import 'package:hypermart/modules/admin/screens/add_rider_screen.dart';
-import 'package:hypermart/modules/admin/screens/inventory_logs_screen.dart';
-import 'package:hypermart/modules/admin/screens/banner_management_screen.dart';
 
 class AdminProfileScreen extends StatefulWidget {
   const AdminProfileScreen({super.key});
@@ -29,6 +28,7 @@ class _AdminProfileScreenState extends State<AdminProfileScreen> {
   Future<void> _loadBiometricPref() async {
     try {
       final prefs = await SharedPreferences.getInstance();
+      if (!mounted) return;
       setState(() {
         _biometricEnabled = prefs.getBool('admin_biometric_lock_enabled') ?? true;
       });
@@ -52,13 +52,13 @@ class _AdminProfileScreenState extends State<AdminProfileScreen> {
     final user = authProvider.currentUserModel;
 
     if (user == null) {
-      return const Scaffold(
-        body: Center(child: CircularProgressIndicator()),
+      return Scaffold(
+        body: Center(child: CircularProgressIndicator(color: AppTokens.primary)),
       );
     }
 
     return Scaffold(
-      backgroundColor: Colors.grey.shade50,
+      backgroundColor: Theme.of(context).colorScheme.surfaceContainerLow,
       body: SingleChildScrollView(
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -118,8 +118,8 @@ class _AdminProfileScreenState extends State<AdminProfileScreen> {
                     height: 100,
                     decoration: BoxDecoration(
                       shape: BoxShape.circle,
-                      color: Colors.white,
-                      border: Border.all(color: Colors.white, width: 4),
+                      color: Theme.of(context).colorScheme.surface,
+                      border: Border.all(color: Theme.of(context).colorScheme.surface, width: 4),
                       boxShadow: [
                         BoxShadow(
                           color: Colors.black.withValues(alpha: 0.08),
@@ -129,13 +129,13 @@ class _AdminProfileScreenState extends State<AdminProfileScreen> {
                       ],
                     ),
                     child: CircleAvatar(
-                      backgroundColor: Colors.blue.shade50,
+                      backgroundColor: Theme.of(context).colorScheme.primaryContainer,
                       child: Text(
                         user.name.isNotEmpty ? user.name[0].toUpperCase() : 'A',
                         style: TextStyle(
                           fontSize: 36,
                           fontWeight: FontWeight.bold,
-                          color: Colors.blue.shade900,
+                          color: Theme.of(context).colorScheme.onPrimaryContainer,
                         ),
                       ),
                     ),
@@ -151,23 +151,21 @@ class _AdminProfileScreenState extends State<AdminProfileScreen> {
                 children: [
                   Text(
                     user.name.isNotEmpty ? user.name : "System Administrator",
-                    style: const TextStyle(
-                      fontSize: 20,
-                      fontWeight: FontWeight.bold,
-                      color: Colors.black87,
+                    style: Theme.of(context).textTheme.titleLarge?.copyWith(
+                      color: Theme.of(context).colorScheme.onSurface,
                     ),
                   ),
                   const SizedBox(height: 6),
                   Container(
                     padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
                     decoration: BoxDecoration(
-                      color: Colors.blue.shade700,
+                      color: Theme.of(context).colorScheme.primary,
                       borderRadius: BorderRadius.circular(20),
                     ),
-                    child: const Text(
-                      'LEVEL 3 SECURITY CLEARANCE',
+                    child: Text(
+                      'ADMINISTRATOR',
                       style: TextStyle(
-                        color: Colors.white,
+                        color: Theme.of(context).colorScheme.onPrimary,
                         fontWeight: FontWeight.bold,
                         fontSize: 9,
                         letterSpacing: 1.1,
@@ -185,8 +183,8 @@ class _AdminProfileScreenState extends State<AdminProfileScreen> {
                child: StreamBuilder<DashboardStats>(
                 stream: Provider.of<ConfigProvider>(context, listen: false).streamDashboardStats(),
                 builder: (context, snapshot) {
-                  if (snapshot.connectionState == ConnectionState.waiting) {
-                    return const Center(child: CircularProgressIndicator());
+                  if (snapshot.connectionState == ConnectionState.waiting && !snapshot.hasData) {
+                    return Center(child: CircularProgressIndicator(color: AppTokens.primary));
                   }
                   final stats = snapshot.data;
                   final productsCount = stats?.productCount ?? 0;
@@ -195,11 +193,11 @@ class _AdminProfileScreenState extends State<AdminProfileScreen> {
 
                   return Row(
                     children: [
-                      _buildMetricSummary('Active Riders', '$activeRiders whitelisted', Colors.orange),
+                      _buildMetricSummary('Riders', '$activeRiders registered', Theme.of(context).colorScheme.primary),
                       const SizedBox(width: 10),
-                      _buildMetricSummary('Products', '$productsCount items', Colors.green),
+                      _buildMetricSummary('Products', '$productsCount items', AppTokens.statusDelivered),
                       const SizedBox(width: 10),
-                      _buildMetricSummary('Pending Orders', '$activeOrders active', Colors.blue),
+                      _buildMetricSummary('Active Orders', '$activeOrders in flight', AppTokens.statusAssigned),
                     ],
                   );
                 },
@@ -213,9 +211,9 @@ class _AdminProfileScreenState extends State<AdminProfileScreen> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  const Text(
+                  Text(
                     "Operational Quick Actions",
-                    style: TextStyle(fontSize: 14, fontWeight: FontWeight.bold, color: Colors.black54),
+                    style: Theme.of(context).textTheme.bodyMedium?.copyWith(fontWeight: FontWeight.bold, color: Theme.of(context).colorScheme.onSurfaceVariant),
                   ),
                   const SizedBox(height: 12),
                   GridView.count(
@@ -230,30 +228,29 @@ class _AdminProfileScreenState extends State<AdminProfileScreen> {
                         icon: Icons.store_mall_directory_rounded,
                         label: 'Store Settings',
                         desc: 'Open hours & fees',
-                        color: Colors.blue,
+                        color: Theme.of(context).colorScheme.primary,
                         onTap: () => Navigator.pushNamed(context, RouteGenerator.storeSettings),
                       ),
                       _buildGridAction(
                         icon: Icons.person_add_alt_1_rounded,
                         label: 'Register Rider',
                         desc: 'Add to whitelists',
-                        color: Colors.orange,
-                        onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const AddRiderScreen())),
+                        color: AppTokens.accent,
+                        onTap: () => Navigator.pushNamed(context, RouteGenerator.addRider),
                       ),
                       _buildGridAction(
                         icon: Icons.receipt_long_rounded,
                         label: 'Inventory Logs',
                         desc: 'Stock ledger checks',
-                        color: Colors.green,
-                        onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const InventoryLogsScreen())),
+                        color: AppTokens.statusDelivered,
+                        onTap: () => Navigator.pushNamed(context, RouteGenerator.inventoryLogs),
                       ),
                       _buildGridAction(
                         icon: Icons.view_carousel_rounded,
                         label: 'Promo Banners',
                         desc: 'Home carousel',
-                        color: Colors.purple,
-                        onTap: () => Navigator.push(context,
-                            MaterialPageRoute(builder: (_) => const BannerManagementScreen())),
+                        color: AppTokens.statusPickedUp,
+                        onTap: () => Navigator.pushNamed(context, RouteGenerator.bannerManagement),
                       ),
                     ],
                   ),
@@ -268,22 +265,22 @@ class _AdminProfileScreenState extends State<AdminProfileScreen> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  const Text(
+                  Text(
                     "App Preferences",
-                    style: TextStyle(fontSize: 14, fontWeight: FontWeight.bold, color: Colors.black54),
+                    style: Theme.of(context).textTheme.bodyMedium?.copyWith(fontWeight: FontWeight.bold, color: Theme.of(context).colorScheme.onSurfaceVariant),
                   ),
                   const SizedBox(height: 12),
                   Card(
                     elevation: 0,
                     shape: RoundedRectangleBorder(
                       borderRadius: BorderRadius.circular(20),
-                      side: BorderSide(color: Colors.grey.shade200),
+                      side: BorderSide(color: Theme.of(context).colorScheme.outlineVariant),
                     ),
-                    color: Colors.white,
+                    color: Theme.of(context).colorScheme.surface,
                     child: Column(
                       children: [
                         ListTile(
-                          leading: const Icon(Icons.dark_mode_outlined, color: Colors.indigo),
+                          leading: Icon(Icons.dark_mode_outlined, color: Theme.of(context).colorScheme.primary),
                           title: const Text("Theme Mode", style: TextStyle(fontWeight: FontWeight.w500, fontSize: 14)),
                           trailing: DropdownButton<String>(
                             value: themeProvider.themeModeString,
@@ -303,12 +300,48 @@ class _AdminProfileScreenState extends State<AdminProfileScreen> {
                         ),
                         const Divider(height: 1, indent: 56),
                         SwitchListTile(
-                          secondary: const Icon(Icons.fingerprint_rounded, color: Colors.blue),
+                          secondary: Icon(Icons.fingerprint_rounded, color: Theme.of(context).colorScheme.primary),
                           title: const Text("Biometric Console Lock", style: TextStyle(fontWeight: FontWeight.w500, fontSize: 14)),
                           subtitle: const Text("Require lock check on background", style: TextStyle(fontSize: 11)),
-                          activeColor: Colors.blue,
+                          activeThumbColor: Theme.of(context).colorScheme.primary,
                           value: _biometricEnabled,
                           onChanged: _toggleBiometric,
+                        ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(height: 20),
+
+                  // Legal & Policies
+                  Text(
+                    "Legal & Platform Policies",
+                    style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                          fontWeight: FontWeight.bold,
+                          color: Theme.of(context).colorScheme.onSurfaceVariant,
+                        ),
+                  ),
+                  const SizedBox(height: 12),
+                  Card(
+                    elevation: 0,
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(20),
+                      side: BorderSide(color: Theme.of(context).colorScheme.outlineVariant),
+                    ),
+                    color: Theme.of(context).colorScheme.surface,
+                    child: Column(
+                      children: [
+                        ListTile(
+                          leading: Icon(Icons.privacy_tip_outlined, color: Theme.of(context).colorScheme.primary),
+                          title: const Text('Privacy Policy', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 14)),
+                          trailing: const Icon(Icons.arrow_forward_ios_rounded, size: 14),
+                          onTap: () => Navigator.pushNamed(context, RouteGenerator.privacyPolicy),
+                        ),
+                        const Divider(height: 1, indent: 56),
+                        ListTile(
+                          leading: Icon(Icons.description_outlined, color: Theme.of(context).colorScheme.primary),
+                          title: const Text('Terms & Conditions', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 14)),
+                          trailing: const Icon(Icons.arrow_forward_ios_rounded, size: 14),
+                          onTap: () => Navigator.pushNamed(context, RouteGenerator.termsConditions),
                         ),
                       ],
                     ),
@@ -324,27 +357,41 @@ class _AdminProfileScreenState extends State<AdminProfileScreen> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  const Text(
-                    "System Connectivity Status",
-                    style: TextStyle(fontSize: 14, fontWeight: FontWeight.bold, color: Colors.black54),
+                  Text(
+                    "About this Console",
+                    style: Theme.of(context).textTheme.bodyMedium?.copyWith(fontWeight: FontWeight.bold, color: Theme.of(context).colorScheme.onSurfaceVariant),
                   ),
                   const SizedBox(height: 12),
                   Card(
                     elevation: 0,
                     shape: RoundedRectangleBorder(
                       borderRadius: BorderRadius.circular(20),
-                      side: BorderSide(color: Colors.grey.shade200),
+                      side: BorderSide(color: Theme.of(context).colorScheme.outlineVariant),
                     ),
-                    color: Colors.white,
+                    color: Theme.of(context).colorScheme.surface,
                     child: Padding(
                       padding: const EdgeInsets.all(16.0),
                       child: Column(
                         children: [
-                          _buildDiagnosticRow(Icons.cloud_done_outlined, 'Firestore Database Connection', 'CONNECTED', Colors.green),
+                          // Real values only. This panel used to show hardcoded
+                          // "CONNECTED" / "ACTIVE" / "v1.0.4-release" regardless of
+                          // the actual state.
+                          _buildDiagnosticRow(
+                            Icons.person_outline_rounded,
+                            'Signed in as',
+                            user.email.isNotEmpty ? user.email : user.name,
+                            Theme.of(context).colorScheme.onSurfaceVariant,
+                          ),
                           const Divider(height: 24),
-                          _buildDiagnosticRow(Icons.security_rounded, 'Authentication Credentials State', 'ACTIVE', Colors.green),
-                          const Divider(height: 24),
-                          _buildDiagnosticRow(Icons.info_outline_rounded, 'Production Console Build', 'v1.0.4-release', Colors.grey),
+                          FutureBuilder<PackageInfo>(
+                            future: PackageInfo.fromPlatform(),
+                            builder: (context, info) => _buildDiagnosticRow(
+                              Icons.info_outline_rounded,
+                              'App version',
+                              info.hasData ? '${info.data!.version}+${info.data!.buildNumber}' : '—',
+                              Theme.of(context).colorScheme.onSurfaceVariant,
+                            ),
+                          ),
                         ],
                       ),
                     ),
@@ -357,7 +404,7 @@ class _AdminProfileScreenState extends State<AdminProfileScreen> {
             // Log Out Button
             Padding(
               padding: const EdgeInsets.symmetric(horizontal: 20.0),
-              child: OutlinedButton.icon(
+              child:               OutlinedButton.icon(
                 onPressed: () async {
                   Navigator.pop(context); // Pop profile screen
                   await authProvider.logout();
@@ -365,8 +412,8 @@ class _AdminProfileScreenState extends State<AdminProfileScreen> {
                 icon: const Icon(Icons.logout_rounded),
                 label: const Text("LOG OUT OF ADMIN CONSOLE", style: TextStyle(fontWeight: FontWeight.bold)),
                 style: OutlinedButton.styleFrom(
-                  foregroundColor: Colors.red.shade700,
-                  side: BorderSide(color: Colors.red.shade200, width: 1.5),
+                  foregroundColor: Theme.of(context).colorScheme.error,
+                  side: BorderSide(color: Theme.of(context).colorScheme.errorContainer, width: 1.5),
                   padding: const EdgeInsets.symmetric(vertical: 16),
                   shape: RoundedRectangleBorder(
                     borderRadius: BorderRadius.circular(16),
@@ -400,7 +447,7 @@ class _AdminProfileScreenState extends State<AdminProfileScreen> {
             const SizedBox(height: 4),
             Text(
               value,
-              style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 12, color: Colors.black87),
+              style: TextStyle(fontWeight: FontWeight.w800, fontSize: 12, color: Theme.of(context).colorScheme.onSurface),
               textAlign: TextAlign.center,
             ),
           ],
@@ -422,9 +469,9 @@ class _AdminProfileScreenState extends State<AdminProfileScreen> {
       child: Container(
         padding: const EdgeInsets.all(14),
         decoration: BoxDecoration(
-          color: Colors.white,
+          color: Theme.of(context).colorScheme.surface,
           borderRadius: BorderRadius.circular(20),
-          border: Border.all(color: Colors.grey.shade200),
+          border: Border.all(color: Theme.of(context).colorScheme.outlineVariant),
           boxShadow: [
             BoxShadow(
               color: Colors.black.withValues(alpha: 0.01),
@@ -445,12 +492,12 @@ class _AdminProfileScreenState extends State<AdminProfileScreen> {
             const SizedBox(height: 10),
             Text(
               label,
-              style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13, color: Colors.black87),
+              style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13, color: Theme.of(context).colorScheme.onSurface),
             ),
             const SizedBox(height: 2),
             Text(
               desc,
-              style: TextStyle(color: Colors.grey.shade500, fontSize: 10),
+              style: TextStyle(color: Theme.of(context).colorScheme.onSurfaceVariant, fontSize: 10),
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
             ),
@@ -463,23 +510,29 @@ class _AdminProfileScreenState extends State<AdminProfileScreen> {
   Widget _buildDiagnosticRow(IconData icon, String label, String status, Color color) {
     return Row(
       children: [
-        Icon(icon, color: Colors.grey.shade600, size: 20),
+        Icon(icon, color: Theme.of(context).colorScheme.onSurfaceVariant, size: 20),
         const SizedBox(width: 12),
         Expanded(
           child: Text(
             label,
-            style: const TextStyle(color: Colors.black87, fontSize: 13, fontWeight: FontWeight.w500),
+            style: TextStyle(color: Theme.of(context).colorScheme.onSurface, fontSize: 13, fontWeight: FontWeight.w500),
           ),
         ),
-        Container(
-          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-          decoration: BoxDecoration(
-            color: color.withValues(alpha: 0.1),
-            borderRadius: BorderRadius.circular(10),
-          ),
-          child: Text(
-            status,
-            style: TextStyle(color: color == Colors.grey ? Colors.grey.shade700 : color, fontSize: 10, fontWeight: FontWeight.bold),
+        // Flexible + ellipsis: a long value (e.g. an email address) used to push
+        // the row past the card edge.
+        Flexible(
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+            decoration: BoxDecoration(
+              color: color.withValues(alpha: 0.1),
+              borderRadius: BorderRadius.circular(10),
+            ),
+            child: Text(
+              status,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(color: color, fontSize: 10, fontWeight: FontWeight.bold),
+            ),
           ),
         ),
       ],

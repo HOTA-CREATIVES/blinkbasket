@@ -2,7 +2,7 @@ import 'package:flutter/material.dart';
 
 class CustomButton extends StatelessWidget {
   final String text;
-  final VoidCallback onPressed;
+  final VoidCallback? onPressed;
   final bool isLoading;
   final Color? backgroundColor;
   final Color? textColor;
@@ -20,27 +20,33 @@ class CustomButton extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final themeBg = backgroundColor ?? Colors.green.shade700;
-    final themeText = textColor ?? Colors.white;
+    final scheme = Theme.of(context).colorScheme;
+    final isEnabled = onPressed != null && !isLoading;
+    final themeBg = backgroundColor ?? scheme.primary;
+    final themeText = textColor ?? scheme.onPrimary;
 
     return SizedBox(
       width: double.infinity,
-      height: 60, // Large, high-accessibility tap target for rural/local users
+      height: 54, // High-accessibility tap target
       child: ElevatedButton(
         style: ElevatedButton.styleFrom(
-          backgroundColor: themeBg,
-          foregroundColor: themeText,
+          backgroundColor: isEnabled ? themeBg : scheme.surfaceContainerHighest,
+          foregroundColor: isEnabled ? themeText : scheme.onSurfaceVariant.withValues(alpha: 0.5),
+          disabledBackgroundColor: scheme.surfaceContainerHighest,
+          disabledForegroundColor: scheme.onSurfaceVariant.withValues(alpha: 0.5),
           elevation: 0,
-          shape: const StadiumBorder(),
-          padding: const EdgeInsets.symmetric(vertical: 16, horizontal: 24),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(14),
+          ),
+          padding: const EdgeInsets.symmetric(vertical: 14, horizontal: 24),
         ),
-        onPressed: isLoading ? null : onPressed,
+        onPressed: isEnabled ? onPressed : null,
         child: isLoading
-            ? const SizedBox(
-                width: 24,
-                height: 24,
+            ? SizedBox(
+                width: 22,
+                height: 22,
                 child: CircularProgressIndicator(
-                  color: Colors.white,
+                  color: isEnabled ? themeText : scheme.primary,
                   strokeWidth: 2.5,
                 ),
               )
@@ -48,17 +54,19 @@ class CustomButton extends StatelessWidget {
                 mainAxisAlignment: MainAxisAlignment.center,
                 children: [
                   if (icon != null) ...[
-                    Icon(icon, size: 24, color: themeText),
-                    const SizedBox(width: 12),
+                    Icon(icon, size: 22, color: isEnabled ? themeText : scheme.onSurfaceVariant),
+                    const SizedBox(width: 10),
                   ],
                   Flexible(
                     child: Text(
                       text,
                       textAlign: TextAlign.center,
-                      style: const TextStyle(
-                        fontSize: 16, // slightly smaller to fit bilingual texts
-                        fontWeight: FontWeight.bold,
-                        letterSpacing: 0.5,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: Theme.of(context).textTheme.titleSmall?.copyWith(
+                        color: isEnabled ? themeText : scheme.onSurfaceVariant.withValues(alpha: 0.5),
+                        fontWeight: FontWeight.w700,
+                        letterSpacing: 0.3,
                       ),
                     ),
                   ),

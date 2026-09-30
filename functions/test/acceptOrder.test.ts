@@ -98,6 +98,30 @@ describe("acceptOrder", () => {
     ).rejects.toThrow(/already accepted/);
   });
 
+  it("is idempotent for the rider who already won it (double-tap / retry after a lost response)", async () => {
+    await seedRider("rider1");
+    await seedOrder("order1");
+
+    await acceptOrder.run(callableRequest({ orderId: "order1" }, "rider1", { delivery: true }));
+    const retry = await acceptOrder.run(
+      callableRequest({ orderId: "order1" }, "rider1", { delivery: true })
+    );
+    expect(retry.success).toBe(true);
+
+    const orderSnap = await db.collection("orders").doc("order1").get();
+    expect(orderSnap.data()?.deliveryBoyId).toBe("rider1");
+    expect(orderSnap.data()?.status).toBe("assigned");
+  });
+
+  it("does not let a rider re-accept an order that has since moved past 'assigned'", async () => {
+    await seedRider("rider1");
+    await seedOrder("order1", { status: "picked_up", deliveryBoyId: "rider1" });
+
+    await expect(
+      acceptOrder.run(callableRequest({ orderId: "order1" }, "rider1", { delivery: true }))
+    ).rejects.toThrow(/already accepted/);
+  });
+
   it("rejects a caller without the delivery custom claim", async () => {
     await seedOrder("order1");
 

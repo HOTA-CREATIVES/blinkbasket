@@ -21,7 +21,7 @@ if (keystorePropertiesFile.exists()) {
 }
 
 android {
-    namespace = "com.example.hypermart"
+    namespace = "com.jcmart.app"
     compileSdk = flutter.compileSdkVersion
     ndkVersion = "27.0.12077973"
 
@@ -35,12 +35,11 @@ android {
     }
 
     defaultConfig {
-        // TODO: Specify your own unique Application ID (https://developer.android.com/studio/build/application-id.html).
-        applicationId = "com.example.hypermart"
+        applicationId = "com.jcmart.app"
         // You can update the following values to match your application needs.
         // For more information, see: https://flutter.dev/to/review-gradle-config.
-        minSdk = 23
-        targetSdk = flutter.targetSdkVersion
+        minSdk = flutter.minSdkVersion
+        targetSdk = 36
         versionCode = flutter.versionCode
         versionName = flutter.versionName
     }
@@ -58,12 +57,16 @@ android {
 
     buildTypes {
         release {
-            // Falls back to the debug keys only if key.properties/the keystore
-            // haven't been generated yet (see android/key.properties).
+            // Release builds are signed with the upload keystore from
+            // android/key.properties — and ONLY that. There is deliberately no
+            // debug-key fallback any more: a silently debug-signed "release"
+            // can't be uploaded to Play and is a security problem if shipped
+            // elsewhere. Building a release without the keystore now fails
+            // (see the guard below the android block).
             signingConfig = if (keystorePropertiesFile.exists()) {
                 signingConfigs.getByName("release")
             } else {
-                signingConfigs.getByName("debug")
+                null
             }
             isMinifyEnabled = true
             isShrinkResources = true
@@ -72,6 +75,21 @@ android {
                 "proguard-rules.pro"
             )
         }
+    }
+}
+
+// Fail closed: refuse to build a release artifact without the keystore. Only
+// assemble/bundle tasks are checked, so debug runs and analysis are unaffected.
+gradle.taskGraph.whenReady {
+    val buildingRelease = allTasks.any {
+        it.name.contains("Release", ignoreCase = true) &&
+            (it.name.startsWith("assemble") || it.name.startsWith("bundle"))
+    }
+    if (buildingRelease && !keystorePropertiesFile.exists()) {
+        throw GradleException(
+            "android/key.properties (upload keystore: keyAlias, keyPassword, storeFile, " +
+                "storePassword) is missing — refusing to build a release with debug signing."
+        )
     }
 }
 

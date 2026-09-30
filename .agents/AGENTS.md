@@ -1,6 +1,6 @@
-# HyperMart Developer Rules & Grounded Context
+# JC Mart Developer Rules & Grounded Context
 
-This file defines the project-wide development rules, clean architecture guidelines, design standards, and constraints for the HyperMart Hyperlocal Commerce Platform.
+This file defines the project-wide development rules, clean architecture guidelines, design standards, and constraints for the JC Mart Hyperlocal Commerce Platform.
 
 ## 1. Clean Architecture Guidelines
 

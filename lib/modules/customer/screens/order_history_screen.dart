@@ -9,11 +9,10 @@ import '../../../core/design/widgets/status_chip.dart';
 import '../../../core/providers/auth_provider.dart';
 import '../../../core/providers/cart_provider.dart';
 import '../../../core/providers/order_provider.dart';
-import '../../../data/repositories/firebase_product_repository.dart';
+import '../../../core/providers/product_provider.dart';
 import '../../../domain/entities/order.dart';
 import '../../../core/utils/reorder_helper.dart';
-import 'cart_screen.dart';
-import 'order_tracking_screen.dart';
+import '../../../core/utils/route_generator.dart';
 
 class OrderHistoryScreen extends StatelessWidget {
   const OrderHistoryScreen({super.key});
@@ -37,18 +36,19 @@ class OrderHistoryScreen extends StatelessWidget {
           : StreamBuilder<List<Order>>(
               stream: orderProvider.streamCustomerOrders(user.uid),
               builder: (context, snapshot) {
-                if (snapshot.connectionState == ConnectionState.waiting) {
+                if (snapshot.connectionState == ConnectionState.waiting && !snapshot.hasData) {
                   return const SkeletonList();
                 }
                 if (snapshot.hasError) {
                   return const EmptyState.error();
                 }
                 if (!snapshot.hasData || snapshot.data!.isEmpty) {
-                  return const EmptyState(
+                  return EmptyState(
                     icon: Icons.receipt_long_outlined,
                     title: 'No orders yet',
-                    message:
-                        'Your orders will appear here once you place them.',
+                    message: 'Start shopping to see your orders here.',
+                    actionLabel: 'Browse Products',
+                    onAction: () => Navigator.of(context).popUntil((r) => r.isFirst),
                   );
                 }
 
@@ -68,12 +68,10 @@ class OrderHistoryScreen extends StatelessWidget {
                       clipBehavior: Clip.antiAlias,
                       child: InkWell(
                         onTap: () {
-                          Navigator.push(
+                          Navigator.pushNamed(
                             context,
-                            MaterialPageRoute(
-                              builder: (_) =>
-                                  OrderTrackingScreen(orderId: order.id),
-                            ),
+                            RouteGenerator.orderTracking,
+                            arguments: order.id,
                           );
                         },
                         child: Padding(
@@ -252,36 +250,44 @@ class _ReorderButtonState extends State<_ReorderButton> {
   Future<void> _handleReorder() async {
     setState(() => _isReordering = true);
 
-    final outcome = await ReorderHelper.reorderOrderItems(
-      widget.items,
-      FirebaseProductRepository(),
-      Provider.of<CartProvider>(context, listen: false),
-    );
+    try {
+      final outcome = await ReorderHelper.reorderOrderItems(
+        widget.items,
+        Provider.of<ProductProvider>(context, listen: false).getProductById,
+        Provider.of<CartProvider>(context, listen: false),
+      );
 
-    if (!mounted) return;
-    setState(() => _isReordering = false);
+      if (!mounted) return;
+      setState(() => _isReordering = false);
 
-    final message = outcome.skippedCount == 0
-        ? '${outcome.addedCount} item(s) added to cart'
-        : '${outcome.addedCount} item(s) added • ${outcome.skippedCount} no longer available';
+      final message = outcome.skippedCount == 0
+          ? '${outcome.addedCount} item(s) added to cart'
+          : '${outcome.addedCount} item(s) added • ${outcome.skippedCount} no longer available';
 
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text(message),
-        behavior: SnackBarBehavior.floating,
-        action: outcome.addedCount > 0
-            ? SnackBarAction(
-                label: 'View Cart',
-                onPressed: () {
-                  Navigator.push(
-                    context,
-                    MaterialPageRoute(builder: (_) => const CartScreen()),
-                  );
-                },
-              )
-            : null,
-      ),
-    );
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(message),
+          behavior: SnackBarBehavior.floating,
+          action: outcome.addedCount > 0
+              ? SnackBarAction(
+                  label: 'View Cart',
+                  onPressed: () {
+                    Navigator.pushNamed(context, RouteGenerator.cart);
+                  },
+                )
+              : null,
+        ),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _isReordering = false);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Failed to reorder: $e'),
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+    }
   }
 
   @override

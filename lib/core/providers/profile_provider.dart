@@ -1,19 +1,28 @@
 import 'package:flutter/material.dart';
 import '../../domain/repositories/auth_repository.dart';
-import '../../data/repositories/firebase_auth_repository.dart';
 import '../models/user_model.dart';
 import '../services/push_notification_service.dart';
 import 'auth_provider.dart';
 
 class ProfileProvider extends ChangeNotifier {
-  final AuthRepository _authRepository = FirebaseAuthRepository();
+  final AuthRepository _authRepository;
   final AuthProvider authProvider;
 
   bool _isLoading = false;
   String? _errorMessage;
   String? _successMessage;
 
-  ProfileProvider({required this.authProvider});
+  ProfileProvider({
+    required this.authProvider,
+    AuthRepository? repository,
+  }) : _authRepository = repository ?? _defaultRepository();
+
+  static AuthRepository _defaultRepository() {
+    throw UnimplementedError(
+      'ProfileProvider needs an injected AuthRepository. '
+      'Wire one in main.dart MultiProvider.',
+    );
+  }
 
   // Getters
   bool get isLoading => _isLoading;
@@ -142,7 +151,12 @@ class ProfileProvider extends ChangeNotifier {
     _setLoading(true);
     _errorMessage = null;
 
-    final updatedAddresses = List<AddressModel>.from(currentUser.addresses)..add(address);
+    // A newly added address the user flagged default demotes the old one; the
+    // very first address becomes default automatically.
+    final base = address.isDefault
+        ? currentUser.addresses.map((a) => a.withDefault(false)).toList()
+        : List<AddressModel>.from(currentUser.addresses);
+    final updatedAddresses = AddressModel.normalizeDefaults([...base, address]);
     final updatedUser = currentUser.copyWith(addresses: updatedAddresses);
 
     final success = await _authRepository.updateUserProfile(updatedUser);
@@ -171,9 +185,13 @@ class ProfileProvider extends ChangeNotifier {
     _setLoading(true);
     _errorMessage = null;
 
-    final updatedAddresses = currentUser.addresses.map((a) {
-      return a.id == address.id ? address : a;
-    }).toList();
+    final updatedAddresses = AddressModel.normalizeDefaults(
+      currentUser.addresses.map((a) {
+        if (a.id == address.id) return address;
+        // Editing an address into the default demotes the others.
+        return address.isDefault ? a.withDefault(false) : a;
+      }).toList(),
+    );
     final updatedUser = currentUser.copyWith(addresses: updatedAddresses);
 
     final success = await _authRepository.updateUserProfile(updatedUser);
@@ -190,6 +208,31 @@ class ProfileProvider extends ChangeNotifier {
     }
   }
 
+  // Make one saved address the default (checkout pre-selects it).
+  Future<bool> setDefaultAddress(String addressId) async {
+    final currentUser = authProvider.currentUserModel;
+    if (currentUser == null) {
+      _errorMessage = "No active user session found.";
+      notifyListeners();
+      return false;
+    }
+
+    final updatedAddresses = [
+      for (final a in currentUser.addresses) a.withDefault(a.id == addressId),
+    ];
+    final updatedUser = currentUser.copyWith(addresses: updatedAddresses);
+
+    // Optimistic, reverted on failure (same pattern as toggleFavorite).
+    authProvider.updateCurrentUserModel(updatedUser);
+    final success = await _authRepository.updateUserProfile(updatedUser);
+    if (!success) {
+      authProvider.updateCurrentUserModel(currentUser);
+      _errorMessage = "Failed to set default address.";
+      notifyListeners();
+    }
+    return success;
+  }
+
   // Delete an address
   Future<bool> deleteAddress(String addressId) async {
     final currentUser = authProvider.currentUserModel;
@@ -202,7 +245,10 @@ class ProfileProvider extends ChangeNotifier {
     _setLoading(true);
     _errorMessage = null;
 
-    final updatedAddresses = currentUser.addresses.where((a) => a.id != addressId).toList();
+    // If the deleted one was the default, the next address is promoted.
+    final updatedAddresses = AddressModel.normalizeDefaults(
+      currentUser.addresses.where((a) => a.id != addressId).toList(),
+    );
     final updatedUser = currentUser.copyWith(addresses: updatedAddresses);
 
     final success = await _authRepository.updateUserProfile(updatedUser);
@@ -251,9 +297,6 @@ class ProfileProvider extends ChangeNotifier {
   // Toggle order-status push notifications for the signed-in user.
   // Persists the preference AND registers/unregisters this device's FCM token
   // so the change takes real effect (no token -> Cloud Functions can't push).
-  // ponytail: per-device token toggle; other signed-in devices keep their own
-  // tokens until they toggle too. Account-wide enforcement would gate on the
-  // flag inside the onOrderWritten push path.
   Future<bool> setNotificationsEnabled(bool enabled) async {
     final currentUser = authProvider.currentUserModel;
     if (currentUser == null) {
@@ -285,32 +328,5 @@ class ProfileProvider extends ChangeNotifier {
       await PushNotificationService.instance.unregisterCurrentDevice(updatedUser);
     }
     return true;
-  }
-
-  // Decoupled method to toggle/update active status (e.g. duty status for delivery rider)
-  Future<bool> updateActiveStatus(bool isActive) async {
-    final currentUser = authProvider.currentUserModel;
-    if (currentUser == null) {
-      _errorMessage = "No active user session found.";
-      notifyListeners();
-      return false;
-    }
-
-    _setLoading(true);
-    _errorMessage = null;
-
-    final updatedUser = currentUser.copyWith(isActive: isActive);
-    final success = await _authRepository.updateUserProfile(updatedUser);
-
-    if (success) {
-      authProvider.updateCurrentUserModel(updatedUser);
-      _successMessage = "Active duty status updated!";
-      _setLoading(false);
-      return true;
-    } else {
-      _errorMessage = "Failed to update active duty status.";
-      _setLoading(false);
-      return false;
-    }
   }
 }

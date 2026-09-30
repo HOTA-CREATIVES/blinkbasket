@@ -20,9 +20,16 @@ class BannerCarousel extends StatefulWidget {
 
 class _BannerCarouselState extends State<BannerCarousel> {
   final PageController _pageController = PageController();
+  final ValueNotifier<int> _currentPageNotifier = ValueNotifier<int>(0);
+  Stream<List<BannerItem>>? _bannersStream;
   Timer? _autoPlayTimer;
-  int _currentPage = 0;
   List<BannerItem> _banners = [];
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    _bannersStream ??= context.read<BannerProvider>().streamActiveBanners();
+  }
 
   @override
   void initState() {
@@ -34,13 +41,14 @@ class _BannerCarouselState extends State<BannerCarousel> {
   void dispose() {
     _stopAutoPlay();
     _pageController.dispose();
+    _currentPageNotifier.dispose();
     super.dispose();
   }
 
   void _startAutoPlay() {
     _autoPlayTimer = Timer.periodic(const Duration(seconds: 4), (timer) {
-      if (_banners.isEmpty || !mounted) return;
-      final nextPage = (_currentPage + 1) % _banners.length;
+      if (_banners.length <= 1 || !mounted || !_pageController.hasClients) return;
+      final nextPage = (_currentPageNotifier.value + 1) % _banners.length;
       _pageController.animateToPage(
         nextPage,
         duration: const Duration(milliseconds: 350),
@@ -56,8 +64,9 @@ class _BannerCarouselState extends State<BannerCarousel> {
 
   @override
   Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
     return StreamBuilder<List<BannerItem>>(
-      stream: context.read<BannerProvider>().streamActiveBanners(),
+      stream: _bannersStream,
       builder: (context, snapshot) {
         if (snapshot.connectionState == ConnectionState.waiting ||
             snapshot.hasError ||
@@ -69,6 +78,7 @@ class _BannerCarouselState extends State<BannerCarousel> {
         _banners = snapshot.data!;
 
         return Column(
+          mainAxisSize: MainAxisSize.min,
           children: [
             SizedBox(
               height: 160,
@@ -76,9 +86,7 @@ class _BannerCarouselState extends State<BannerCarousel> {
                 controller: _pageController,
                 itemCount: _banners.length,
                 onPageChanged: (index) {
-                  setState(() {
-                    _currentPage = index;
-                  });
+                  _currentPageNotifier.value = index;
                 },
                 itemBuilder: (context, index) {
                   final banner = _banners[index];
@@ -96,15 +104,15 @@ class _BannerCarouselState extends State<BannerCarousel> {
                           imageUrl: banner.imageUrl,
                           fit: BoxFit.cover,
                           placeholder: (context, url) => Container(
-                            color: Colors.grey.shade200,
+                            color: scheme.surfaceContainerHighest.withValues(alpha: 0.5),
                             child: const Center(
                               child: CircularProgressIndicator(strokeWidth: 2),
                             ),
                           ),
                           errorWidget: (context, url, error) => Container(
-                            color: Colors.grey.shade100,
-                            child: const Center(
-                              child: Icon(Icons.broken_image, color: Colors.grey),
+                            color: scheme.surfaceContainerHighest.withValues(alpha: 0.3),
+                            child: Center(
+                              child: Icon(Icons.broken_image, color: scheme.onSurfaceVariant),
                             ),
                           ),
                         ),
@@ -115,23 +123,26 @@ class _BannerCarouselState extends State<BannerCarousel> {
               ),
             ),
             const SizedBox(height: AppTokens.s8),
-            Row(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: List.generate(_banners.length, (index) {
-                final isSelected = _currentPage == index;
-                return AnimatedContainer(
-                  duration: AppTokens.fast,
-                  margin: const EdgeInsets.symmetric(horizontal: 3.0),
-                  height: 6.0,
-                  width: isSelected ? 16.0 : 6.0,
-                  decoration: BoxDecoration(
-                    color: isSelected
-                        ? Theme.of(context).colorScheme.primary
-                        : Colors.grey.shade300,
-                    borderRadius: BorderRadius.circular(3.0),
-                  ),
+            ValueListenableBuilder<int>(
+              valueListenable: _currentPageNotifier,
+              builder: (context, currentPage, child) {
+                return Row(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: List.generate(_banners.length, (index) {
+                    final isSelected = currentPage == index;
+                    return AnimatedContainer(
+                      duration: AppTokens.fast,
+                      margin: const EdgeInsets.symmetric(horizontal: 3.0),
+                      height: 6.0,
+                      width: isSelected ? 16.0 : 6.0,
+                      decoration: BoxDecoration(
+                        color: isSelected ? scheme.primary : scheme.outlineVariant,
+                        borderRadius: BorderRadius.circular(3.0),
+                      ),
+                    );
+                  }),
                 );
-              }),
+              },
             ),
           ],
         );

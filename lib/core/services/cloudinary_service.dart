@@ -8,12 +8,18 @@ import 'package:http/http.dart' as http;
 /// the `getCloudinarySignature` Cloud Function — the API secret never ships
 /// inside the client binary.
 class CloudinaryService {
-  final FirebaseFunctions _functions =
+  FirebaseFunctions get _functions =>
       FirebaseFunctions.instanceFor(region: 'asia-south1');
 
   /// Uploads an image file to Cloudinary using signed authentication.
   /// Returns the secure URL of the uploaded image on success, or null on failure.
   Future<String?> uploadImage(File file) async {
+    return uploadBytes(await file.readAsBytes(), filename: file.path.split(RegExp(r'[\\/]')).last);
+  }
+
+  /// Same upload from raw bytes — the only form that works on web, where
+  /// `dart:io` File paths don't exist. Prefer this with `XFile.readAsBytes()`.
+  Future<String?> uploadBytes(Uint8List bytes, {required String filename}) async {
     try {
       final callable = _functions.httpsCallable('getCloudinarySignature');
       final signatureResult = await callable.call<Map<String, dynamic>>();
@@ -30,7 +36,7 @@ class CloudinaryService {
         ..fields['timestamp'] = timestamp
         ..fields['folder'] = folder
         ..fields['signature'] = signature
-        ..files.add(await http.MultipartFile.fromPath('file', file.path));
+        ..files.add(http.MultipartFile.fromBytes('file', bytes, filename: filename));
 
       final response = await request.send();
 

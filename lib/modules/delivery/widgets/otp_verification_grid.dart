@@ -62,11 +62,15 @@ class _OtpVerificationGridState extends State<OtpVerificationGrid>
   }
 
   Future<void> _verifyOtp() async {
+    // Auto-submit on the 4th digit plus the button (or a re-edit of the last
+    // box) can fire twice; each wrong call burns a server-side attempt.
+    if (_isVerifying) return;
     final otp = _controllers.map((c) => c.text.trim()).join();
     if (otp.length != 4) {
       setState(() {
         _serverError = 'Please enter all 4 digits';
       });
+      HapticFeedback.mediumImpact();
       _shakeController.forward(from: 0);
       return;
     }
@@ -76,26 +80,47 @@ class _OtpVerificationGridState extends State<OtpVerificationGrid>
       _serverError = null;
     });
 
-    final orderProvider = Provider.of<OrderProvider>(context, listen: false);
-    final error = await orderProvider.verifyDelivery(widget.orderId, otp);
+    try {
+      final orderProvider = Provider.of<OrderProvider>(context, listen: false);
+      final error = await orderProvider.verifyDelivery(widget.orderId, otp);
 
-    if (error != null) {
+      if (!mounted) return;
+
+      if (error != null) {
+        HapticFeedback.mediumImpact();
+        _shakeController.forward(from: 0);
+        setState(() {
+          _isVerifying = false;
+          _serverError = error;
+          for (var ctrl in _controllers) {
+            ctrl.clear();
+          }
+          _focusNodes[0].requestFocus();
+        });
+      } else {
+        widget.onSuccess();
+      }
+    } catch (e) {
+      if (!mounted) return;
+      HapticFeedback.mediumImpact();
       _shakeController.forward(from: 0);
       setState(() {
         _isVerifying = false;
-        _serverError = error;
-        // Clear digits on error
+        _serverError = 'Verification failed. Please try again.';
         for (var ctrl in _controllers) {
           ctrl.clear();
         }
         _focusNodes[0].requestFocus();
       });
-    } else {
-      widget.onSuccess();
     }
   }
 
   void _onDigitInput(int index, String val) {
+    if (_serverError != null) {
+      setState(() {
+        _serverError = null;
+      });
+    }
     if (val.isNotEmpty) {
       // Inputted a digit, move focus next
       if (index < 3) {
@@ -128,19 +153,19 @@ class _OtpVerificationGridState extends State<OtpVerificationGrid>
         children: [
           Icon(Icons.verified_user_outlined, color: scheme.primary),
           const SizedBox(width: 8),
-          const Text(
-            'Verify Delivery',
-            style: TextStyle(fontWeight: FontWeight.w800, fontSize: 18),
-          ),
+          Text('Verify Delivery', style: Theme.of(context).textTheme.titleLarge),
         ],
       ),
       content: Column(
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          const Text(
+          Text(
             'Ask the customer for the 4-digit verification code shown in their app.',
-            style: TextStyle(color: Colors.black54, fontSize: 13, height: 1.4),
+            style: Theme.of(context)
+                .textTheme
+                .bodySmall
+                ?.copyWith(color: scheme.onSurfaceVariant, height: 1.4),
           ),
           const SizedBox(height: 24),
           AnimatedBuilder(
@@ -175,7 +200,7 @@ class _OtpVerificationGridState extends State<OtpVerificationGrid>
                       style: TextStyle(
                         fontSize: 22,
                         fontWeight: FontWeight.bold,
-                        color: _serverError != null ? Colors.red.shade700 : Colors.black87,
+                        color: _serverError != null ? scheme.error : scheme.onSurface,
                       ),
                       inputFormatters: [
                         FilteringTextInputFormatter.digitsOnly,
@@ -183,22 +208,20 @@ class _OtpVerificationGridState extends State<OtpVerificationGrid>
                       decoration: InputDecoration(
                         counterText: '',
                         filled: true,
-                        fillColor: Colors.grey.shade50,
+                        fillColor: scheme.surfaceContainerHighest.withValues(alpha: 0.4),
                         contentPadding: EdgeInsets.zero,
                         enabledBorder: OutlineInputBorder(
                           borderRadius: BorderRadius.circular(AppTokens.rMd),
                           borderSide: BorderSide(
                             color: _serverError != null
-                                ? Colors.red.shade200
-                                : Colors.grey.shade300,
+                                ? scheme.error.withValues(alpha: 0.5)
+                                : scheme.outlineVariant,
                           ),
                         ),
                         focusedBorder: OutlineInputBorder(
                           borderRadius: BorderRadius.circular(AppTokens.rMd),
                           borderSide: BorderSide(
-                            color: _serverError != null
-                                ? Colors.red.shade600
-                                : scheme.primary,
+                            color: _serverError != null ? scheme.error : scheme.primary,
                             width: 2.0,
                           ),
                         ),
@@ -215,11 +238,10 @@ class _OtpVerificationGridState extends State<OtpVerificationGrid>
             Text(
               _serverError!,
               textAlign: TextAlign.center,
-              style: TextStyle(
-                color: Colors.red.shade700,
-                fontSize: 13,
-                fontWeight: FontWeight.bold,
-              ),
+              style: Theme.of(context)
+                  .textTheme
+                  .bodySmall
+                  ?.copyWith(color: scheme.error, fontWeight: FontWeight.bold),
             ),
           ],
         ],
@@ -229,22 +251,22 @@ class _OtpVerificationGridState extends State<OtpVerificationGrid>
           onPressed: _isVerifying ? null : () => Navigator.pop(context),
           child: Text(
             'Cancel',
-            style: TextStyle(color: Colors.grey.shade600, fontWeight: FontWeight.bold),
+            style: TextStyle(color: scheme.onSurfaceVariant, fontWeight: FontWeight.bold),
           ),
         ),
         ElevatedButton(
           onPressed: _isVerifying ? null : _verifyOtp,
           style: ElevatedButton.styleFrom(
             backgroundColor: scheme.primary,
-            foregroundColor: Colors.white,
+            foregroundColor: scheme.onPrimary,
             elevation: 0,
             shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(AppTokens.rSm)),
           ),
           child: _isVerifying
-              ? const SizedBox(
+              ? SizedBox(
                   width: 20,
                   height: 20,
-                  child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2),
+                  child: CircularProgressIndicator(color: scheme.onPrimary, strokeWidth: 2),
                 )
               : const Text('Verify', style: TextStyle(fontWeight: FontWeight.bold)),
         ),

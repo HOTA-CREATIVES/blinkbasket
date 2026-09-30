@@ -22,7 +22,7 @@ class _BannerManagementScreenState extends State<BannerManagementScreen> {
     showModalBottomSheet(
       context: context,
       isScrollControlled: true,
-      backgroundColor: Colors.white,
+      backgroundColor: Theme.of(context).colorScheme.surface,
       shape: const RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
       ),
@@ -50,13 +50,12 @@ class _BannerManagementScreenState extends State<BannerManagementScreen> {
                   ScaffoldMessenger.of(context).showSnackBar(
                     const SnackBar(
                       content: Text('Banner deleted successfully.'),
-                      backgroundColor: Colors.green,
                       behavior: SnackBarBehavior.floating,
                     ),
                   );
                 }
               },
-              child: const Text('DELETE', style: TextStyle(color: Colors.red)),
+              child: Text('DELETE', style: TextStyle(color: Theme.of(context).colorScheme.error)),
             ),
           ],
         );
@@ -81,7 +80,7 @@ class _BannerManagementScreenState extends State<BannerManagementScreen> {
         stream: bannerProvider.streamAllBanners(),
         builder: (context, snapshot) {
           if (snapshot.connectionState == ConnectionState.waiting) {
-            return const Center(child: CircularProgressIndicator());
+            return Center(child: CircularProgressIndicator(color: AppTokens.primary));
           }
 
           if (!snapshot.hasData || snapshot.data!.isEmpty) {
@@ -89,11 +88,11 @@ class _BannerManagementScreenState extends State<BannerManagementScreen> {
               child: Column(
                 mainAxisAlignment: MainAxisAlignment.center,
                 children: [
-                  Icon(Icons.view_carousel_outlined, size: 64, color: Colors.grey.shade300),
+                  Icon(Icons.view_carousel_outlined, size: 64, color: Theme.of(context).colorScheme.outlineVariant),
                   const SizedBox(height: 16),
-                  const Text(
+                  Text(
                     'No promotional banners created yet.',
-                    style: TextStyle(color: Colors.grey, fontSize: 16, fontWeight: FontWeight.bold),
+                    style: Theme.of(context).textTheme.titleMedium?.copyWith(color: Theme.of(context).colorScheme.onSurfaceVariant),
                   ),
                 ],
               ),
@@ -125,14 +124,14 @@ class _BannerManagementScreenState extends State<BannerManagementScreen> {
                           placeholder: (context, url) => Container(
                             width: 100,
                             height: 60,
-                            color: Colors.grey.shade100,
-                            child: const Center(child: CircularProgressIndicator(strokeWidth: 2)),
+                            color: Theme.of(context).colorScheme.surfaceContainerLow,
+                            child: Center(child: CircularProgressIndicator(strokeWidth: 2, color: scheme.primary)),
                           ),
                           errorWidget: (context, url, error) => Container(
                             width: 100,
                             height: 60,
-                            color: Colors.grey.shade100,
-                            child: const Icon(Icons.broken_image, color: Colors.grey),
+                            color: Theme.of(context).colorScheme.surfaceContainerLow,
+                            child: Icon(Icons.broken_image, color: Theme.of(context).colorScheme.onSurfaceVariant),
                           ),
                         ),
                       ),
@@ -150,7 +149,7 @@ class _BannerManagementScreenState extends State<BannerManagementScreen> {
                             const SizedBox(height: 4),
                             Text(
                               'Sort Order: ${banner.sortOrder}',
-                              style: TextStyle(color: Colors.grey.shade600, fontSize: 12),
+                              style: TextStyle(color: Theme.of(context).colorScheme.onSurfaceVariant, fontSize: 12),
                             ),
                             const SizedBox(height: 8),
                             Row(
@@ -161,7 +160,7 @@ class _BannerManagementScreenState extends State<BannerManagementScreen> {
                                   height: 24,
                                   child: Switch(
                                     value: banner.isActive,
-                                    activeColor: scheme.primary,
+                                    activeThumbColor: scheme.primary,
                                     onChanged: (val) async {
                                       final updated = BannerItem(
                                         id: banner.id,
@@ -185,37 +184,43 @@ class _BannerManagementScreenState extends State<BannerManagementScreen> {
                           Row(
                             mainAxisSize: MainAxisSize.min,
                             children: [
-                              IconButton(
-                                icon: const Icon(Icons.arrow_upward_rounded, size: 18),
-                                padding: EdgeInsets.zero,
-                                constraints: const BoxConstraints(),
-                                onPressed: () async {
-                                  final updated = BannerItem(
-                                    id: banner.id,
-                                    imageUrl: banner.imageUrl,
-                                    category: banner.category,
-                                    isActive: banner.isActive,
-                                    sortOrder: banner.sortOrder - 1,
-                                    createdAt: banner.createdAt,
-                                  );
-                                  await bannerProvider.updateBanner(updated);
-                                },
+                              Tooltip(
+                                message: 'Move Up',
+                                child: IconButton(
+                                  icon: const Icon(Icons.arrow_upward_rounded, size: 18),
+                                  padding: EdgeInsets.zero,
+                                  constraints: const BoxConstraints(),
+                                  onPressed: () async {
+                                    final updated = BannerItem(
+                                      id: banner.id,
+                                      imageUrl: banner.imageUrl,
+                                      category: banner.category,
+                                      isActive: banner.isActive,
+                                      sortOrder: banner.sortOrder - 1,
+                                      createdAt: banner.createdAt,
+                                    );
+                                    await bannerProvider.updateBanner(updated);
+                                  },
+                                ),
                               ),
-                              IconButton(
-                                icon: const Icon(Icons.arrow_downward_rounded, size: 18),
-                                padding: EdgeInsets.zero,
-                                constraints: const BoxConstraints(),
-                                onPressed: () async {
-                                  final updated = BannerItem(
-                                    id: banner.id,
-                                    imageUrl: banner.imageUrl,
-                                    category: banner.category,
-                                    isActive: banner.isActive,
-                                    sortOrder: banner.sortOrder + 1,
-                                    createdAt: banner.createdAt,
-                                  );
-                                  await bannerProvider.updateBanner(updated);
-                                },
+                              Tooltip(
+                                message: 'Move Down',
+                                child: IconButton(
+                                  icon: const Icon(Icons.arrow_downward_rounded, size: 18),
+                                  padding: EdgeInsets.zero,
+                                  constraints: const BoxConstraints(),
+                                  onPressed: () async {
+                                    final updated = BannerItem(
+                                      id: banner.id,
+                                      imageUrl: banner.imageUrl,
+                                      category: banner.category,
+                                      isActive: banner.isActive,
+                                      sortOrder: banner.sortOrder + 1,
+                                      createdAt: banner.createdAt,
+                                    );
+                                    await bannerProvider.updateBanner(updated);
+                                  },
+                                ),
                               ),
                             ],
                           ),
@@ -223,18 +228,24 @@ class _BannerManagementScreenState extends State<BannerManagementScreen> {
                           Row(
                             mainAxisSize: MainAxisSize.min,
                             children: [
-                              IconButton(
-                                icon: const Icon(Icons.edit_outlined, color: Colors.blue, size: 18),
-                                padding: EdgeInsets.zero,
-                                constraints: const BoxConstraints(),
-                                onPressed: () => _showAddEditBannerSheet(context, banner: banner),
+                              Tooltip(
+                                message: 'Edit Banner',
+                                child: IconButton(
+                                  icon: Icon(Icons.edit_outlined, color: Theme.of(context).colorScheme.primary, size: 18),
+                                  padding: EdgeInsets.zero,
+                                  constraints: const BoxConstraints(),
+                                  onPressed: () => _showAddEditBannerSheet(context, banner: banner),
+                                ),
                               ),
                               const SizedBox(width: 8),
-                              IconButton(
-                                icon: const Icon(Icons.delete_outline_rounded, color: Colors.red, size: 18),
-                                padding: EdgeInsets.zero,
-                                constraints: const BoxConstraints(),
-                                onPressed: () => _confirmDeleteBanner(context, banner.id),
+                              Tooltip(
+                                message: 'Delete Banner',
+                                child: IconButton(
+                                  icon: Icon(Icons.delete_outline_rounded, color: Theme.of(context).colorScheme.error, size: 18),
+                                  padding: EdgeInsets.zero,
+                                  constraints: const BoxConstraints(),
+                                  onPressed: () => _confirmDeleteBanner(context, banner.id),
+                                ),
                               ),
                             ],
                           ),
@@ -304,7 +315,7 @@ class _AddEditBannerSheetState extends State<_AddEditBannerSheet> {
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
         content: Text(message),
-        backgroundColor: isError ? Colors.red.shade700 : Colors.green.shade700,
+        backgroundColor: isError ? Theme.of(context).colorScheme.error : AppTokens.statusDelivered,
         behavior: SnackBarBehavior.floating,
       ),
     );
@@ -417,7 +428,7 @@ class _AddEditBannerSheetState extends State<_AddEditBannerSheet> {
                         width: 40,
                         height: 4,
                         decoration: BoxDecoration(
-                          color: Colors.grey.shade300,
+                          color: Theme.of(context).colorScheme.outlineVariant,
                           borderRadius: BorderRadius.circular(2),
                         ),
                       ),
@@ -434,9 +445,9 @@ class _AddEditBannerSheetState extends State<_AddEditBannerSheet> {
                       child: Container(
                         height: 160,
                         decoration: BoxDecoration(
-                          color: Colors.grey.shade50,
+                          color: Theme.of(context).colorScheme.surfaceContainerLow,
                           borderRadius: BorderRadius.circular(16),
-                          border: Border.all(color: Colors.grey.shade300),
+                          border: Border.all(color: Theme.of(context).colorScheme.outlineVariant),
                         ),
                         child: _imageFile != null
                             ? ClipRRect(
@@ -452,19 +463,19 @@ class _AddEditBannerSheetState extends State<_AddEditBannerSheet> {
                                       width: double.infinity,
                                     ),
                                   )
-                                : const Column(
+                                : Column(
                                     mainAxisAlignment: MainAxisAlignment.center,
                                     children: [
-                                      Icon(Icons.add_photo_alternate_outlined, size: 40, color: Colors.grey),
-                                      SizedBox(height: 8),
-                                      Text('Tap to upload banner photo', style: TextStyle(color: Colors.grey, fontSize: 13)),
+                                      Icon(Icons.add_photo_alternate_outlined, size: 40, color: Theme.of(context).colorScheme.onSurfaceVariant),
+                                      const SizedBox(height: 8),
+                                      Text('Tap to upload banner photo', style: TextStyle(color: Theme.of(context).colorScheme.onSurfaceVariant, fontSize: 13)),
                                     ],
                                   )),
                       ),
                     ),
                     const SizedBox(height: 20),
                     DropdownButtonFormField<String>(
-                      value: _selectedCategory,
+                      initialValue: _selectedCategory,
                       decoration: InputDecoration(
                         labelText: 'Target Category (Optional)',
                         prefixIcon: const Icon(Icons.category_outlined),
@@ -509,7 +520,7 @@ class _AddEditBannerSheetState extends State<_AddEditBannerSheet> {
                       title: const Text('Active', style: TextStyle(fontWeight: FontWeight.w600)),
                       subtitle: const Text('Show this banner on the customer home screen'),
                       value: _isActive,
-                      activeColor: scheme.primary,
+                      activeThumbColor: scheme.primary,
                       contentPadding: EdgeInsets.zero,
                       onChanged: _isSubmitting
                           ? null
@@ -529,16 +540,16 @@ class _AddEditBannerSheetState extends State<_AddEditBannerSheet> {
                         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
                       ),
                       child: _isSubmitting
-                          ? const Row(
+                          ? Row(
                               mainAxisAlignment: MainAxisAlignment.center,
                               children: [
                                 SizedBox(
                                   width: 20,
                                   height: 20,
-                                  child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2),
+                                  child: CircularProgressIndicator(color: Theme.of(context).colorScheme.onPrimary, strokeWidth: 2),
                                 ),
-                                SizedBox(width: 12),
-                                Text('Saving...'),
+                                const SizedBox(width: 12),
+                                const Text('Saving...'),
                               ],
                             )
                           : const Text('SAVE BANNER', style: TextStyle(fontWeight: FontWeight.bold)),

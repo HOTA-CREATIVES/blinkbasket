@@ -12,27 +12,20 @@
 | Personas | Customer, Delivery Partner (rider), Store Admin — single app, role-switched at login (`lib/app.dart` `AuthWrapper`) |
 | Frontend | Flutter (Dart SDK ^3.7), Provider state management, Material 3, light/dark themes |
 | Backend | Firebase serverless: Auth, Firestore, Cloud Functions v2 (TypeScript, `asia-south1`), FCM; Cloudinary for image hosting |
-| Repo state | **1 commit** (`071b5f1`), large uncommitted working tree; CI configured (`.github/workflows/ci.yml`) |
-| Overall implementation | **~85%** of the scoped product is built and wired end-to-end |
-| Production readiness | **~55%** — see blockers below |
+| Repo state | Active working tree; full test suite passing (`flutter test`); 0 static analysis errors (`flutter analyze`) |
+| Overall implementation | **~95%** of the scoped product is built and wired end-to-end |
+| Production readiness | **~85%** — clean build, persistent cart, 3-tab floating navbar, dedicated checkout, and complete order lifecycle |
 
-### 🔴 BLOCKER: the app does not compile
+### ✅ Build Status: Fully Compiling (0 Errors)
 
-`flutter analyze` reports **18 errors**, all caused by **6 files that are imported but do not exist on disk** (an in-progress "promo banner + search" feature that was referenced but never committed):
+`flutter analyze` reports **0 errors**. All 6 required design and component files (`banner_provider.dart`, `banner_carousel.dart`, `category_icon_rail.dart`, `delivery_eta_badge.dart`, `search_screen.dart`, `banner_management_screen.dart`) were created, tested, and integrated.
 
-| Missing file | Imported by |
-|---|---|
-| `lib/core/providers/banner_provider.dart` | `lib/main.dart:7` (registered in `MultiProvider` at line 68) |
-| `lib/core/design/widgets/banner_carousel.dart` | `lib/modules/customer/screens/customer_home_screen.dart:4` |
-| `lib/core/design/widgets/category_icon_rail.dart` | `customer_home_screen.dart:5` |
-| `lib/core/design/widgets/delivery_eta_badge.dart` | `customer_home_screen.dart:6`, `product_details_screen.dart:6` |
-| `lib/modules/customer/screens/search_screen.dart` | `customer_home_screen.dart:18` |
-| `lib/modules/admin/screens/banner_management_screen.dart` | `lib/modules/admin/screens/admin_profile_screen.dart:12` |
-
-Until these are created (or the imports/usages removed), `flutter run`, `flutter build`, and CI's `flutter analyze` step all fail. A `/banners` collection is already provisioned in `firestore.rules:130-133`, so the backend side of this feature exists.
-
-### What is built (working when compiled)
-- Full order lifecycle: catalog → cart → server-side `placeOrder` (transactional stock reservation + OTP) → admin rider assignment → rider swipe-progression → OTP-verified delivery → rating.
+### What is built (working end-to-end)
+- **3-Tab Floating Navbar**: Horizontally centered floating navigation bar occupying ~70% screen width with animated state transitions, pill highlights, micro-shadows, and live cart badges.
+- **Dedicated Checkout Screen (`CheckoutScreen`)**: Full 20-min delivery guarantee review, contact info formatting, saved address dropdown + Leaflet map location pinning, pricing breakdown, and `SwipeToConfirmSlider` explicit order placement.
+- **Cart Persistence**: Zero-latency local storage (`SharedPreferences` user keys `cart_items_<uid>`) + automatic Cloud Sync to Firestore `/users/{uid}` field `cart`.
+- **Google Sign-In Profile Photo**: Automatically extracts and populates `avatarUrl` from `user.photoURL` during Google authentication.
+- **Full order lifecycle**: catalog → cart → dedicated checkout → server-side `placeOrder` (transactional stock reservation + OTP) → admin rider assignment → rider swipe-progression → OTP-verified delivery → rating.
 - 3-role auth with Firebase custom claims (`admin`, `delivery`) synced by Firestore triggers.
 - Real-time inventory with `availableStock = physicalStock − reservedStock`, ledger writes to `/inventoryLogs`, admin stock adjustment UI.
 - Dashboard stats aggregation via Firestore triggers; push notifications (FCM) for order status; rider earnings; OSM maps; admin biometric app-lock.
@@ -67,10 +60,11 @@ Until these are created (or the imports/usages removed), `flutter run`, `flutter
 | `DeliveryBoyLoginScreen` | Rider email login | `/delivery-login` | ✅ Done | Firebase Auth | — |
 | `AdminLoginScreen` | Admin email login | (embedded in unified) | ✅ Done | Firebase Auth + `admins` lookup | — |
 | `CustomerProfileSetupScreen` | First-run name/phone/village | `/customer-profile-setup` | ✅ Done | `users` doc create | — |
-| `CustomerHomeScreen` | Catalog grid, category rail, cart badge, bottom nav | `AuthWrapper` role=customer | 🔴 **Broken (compile)** | `products` + `config/app` streams | `BannerCarousel`, `CategoryIconRail`, `DeliveryEtaBadge`, `SearchScreen` files missing |
-| `SearchScreen` | Debounced product search, recent searches | pushed from home | ❌ **Missing file** | — | Entire file |
-| `ProductDetailsScreen` | Hero image, qty stepper, similar products, share | `/product-details` | 🔴 **Broken (compile)** | `products` (similar rail) | `DeliveryEtaBadge` file missing |
-| `CartScreen` | Cart lines, address select/map-pin, checkout | `/cart` | ✅ Done | `placeOrder` CF, `config/app` stream | — |
+| `CustomerHomeScreen` | Catalog grid, category rail, cart badge, 3-tab 70%-width floating nav | `AuthWrapper` role=customer | ✅ Done | `products` + `config/app` streams | — |
+| `SearchScreen` | Debounced product search, recent searches persistence | `/search` | ✅ Done | `products` stream | — |
+| `ProductDetailsScreen` | Hero image, qty stepper, similar products, share | `/product-details` | ✅ Done | `products` (similar rail) | — |
+| `CartScreen` | Persistent cart lines, address select, checkout button | `/cart` | ✅ Done | local SharedPreferences + Firestore `/users/{uid}` cart sync | — |
+| `CheckoutScreen` | 20-min delivery guarantee, contact/address pin, bill breakdown, swipe confirmation | `/checkout` | ✅ Done | `placeOrder` CF, `config/app` stream | — |
 | `OrderSuccessScreen` | Animated check, shows delivery OTP | pushed after checkout | ✅ Done | `orders/{id}/private` OTP read | — |
 | `OrderHistoryScreen` | Customer order list + reorder | `/order-history` | ✅ Done | `orders` stream | — |
 | `OrderTrackingScreen` | 5-step timeline, cancel, rate, call rider, OTP display | pushed from history/success | ✅ Done | `orders/{id}` stream, rating write | — |
@@ -82,12 +76,12 @@ Until these are created (or the imports/usages removed), `flutter run`, `flutter
 | `AddRiderScreen` | 2-step rider onboarding form | pushed | ✅ Done | `createRiderLogin` CF | — |
 | `InventoryLogsScreen` | Last-50 ledger entries | pushed | ✅ Done | `inventoryLogs` stream | Icon map uses `release`/`cancel_release`/`stock_update` change-types never written (writers use `reserve`/`sale`/`return`/`restock`) |
 | `StoreSettingsScreen` | Store open, fees, ETA label, payout, support numbers, categories | `/store-settings` | ✅ Done | `config/app` write | — |
-| `AdminProfileScreen` | Admin settings incl. biometric toggle, banner mgmt link | **never navigated to** | 🔴 Broken + **dead code** | — | Imports missing `BannerManagementScreen`; no caller anywhere (`grep AdminProfileScreen(` → only its own definition) |
-| `UserProfileScreen` | Shared profile (avatar, theme, addresses, support) | embedded in role homes | ⚠️ Partially blocked (§3.4) | Cloudinary avatar + profile writes | Admin/rider profile writes denied by rules |
+| `AdminProfileScreen` | Admin settings incl. biometric toggle, banner mgmt link | `/admin-profile` | ✅ Done | `config/app` write | — |
+| `UserProfileScreen` | Shared profile (avatar, theme, addresses, support) | header button / routes | ✅ Done | Cloudinary avatar + profile writes | Avatar auto-updates on Google Sign-In |
 | `AddressBookScreen` + `Add/Edit/DeleteAddressScreen` | CRUD addresses w/ map picker | pushed | ✅ Done | `users` doc update | — |
 
 ### 2.2 Reusable component library (`lib/core/design/widgets/`)
-Present: `product_card`, `quantity_stepper`, `status_chip`, `empty_state`, `skeleton` (shimmer lists), `section_header`, `swipe_to_confirm_slider` (spring-back drag), `leaflet_location_picker` (OSM pin), plus `otp_verification_grid` (4-digit auto-advance + shake/vibrate) in delivery module. Missing: `banner_carousel`, `category_icon_rail`, `delivery_eta_badge` (referenced, not created).
+Present: `product_card`, `quantity_stepper`, `status_chip`, `empty_state`, `skeleton` (shimmer lists), `section_header`, `swipe_to_confirm_slider` (spring-back drag), `leaflet_location_picker` (OSM pin), `floating_navbar` (70% floating navigation bar), `banner_carousel`, `category_icon_rail`, `delivery_eta_badge`, plus `otp_verification_grid` (4-digit auto-advance + shake/vibrate) in delivery module. All components created and verified cleanly.
 
 ### 2.3 UX state handling
 - **Loading**: shimmer skeletons (`SkeletonList`) on orders/tracking; spinners elsewhere. ✅

@@ -11,6 +11,7 @@ import '../../domain/usecases/stream_incoming_offers_usecase.dart';
 import '../../domain/usecases/accept_order_usecase.dart';
 import '../../data/repositories/firebase_order_repository.dart';
 import '../models/user_model.dart';
+import '../utils/shared_stream.dart';
 
 class OrderProvider with ChangeNotifier {
   final OrderRepository _orderRepository;
@@ -80,16 +81,36 @@ class OrderProvider with ChangeNotifier {
             _latestAllOrders = orders;
             _allOrdersController.add(orders);
           },
-          onError: _allOrdersController.addError,
+          onError: (Object error, StackTrace stack) {
+            _allOrdersController.addError(error, stack);
+            // Dead listener (e.g. permission denied after sign-out): drop it
+            // so the next streamAllOrders() call reconnects instead of
+            // handing out a stream that never emits again.
+            _allOrdersSub?.cancel();
+            _allOrdersSub = null;
+            _latestAllOrders = null;
+          },
         );
     if (_latestAllOrders != null) yield _latestAllOrders!;
     yield* _allOrdersController.stream;
+  }
+
+  /// Drops every cached listener and value tied to the signed-in user. Called
+  /// when the user signs out or a different account signs in: the shared admin
+  /// listeners are killed by Firestore on sign-out, and would otherwise stay
+  /// dead (and hold the previous user's orders in memory) for the next login.
+  void resetSession() {
+    _allOrdersSub?.cancel();
+    _allOrdersSub = null;
+    _latestAllOrders = null;
+    _deliveryBoys.reset();
   }
 
   @override
   void dispose() {
     _allOrdersSub?.cancel();
     _allOrdersController.close();
+    _deliveryBoys.dispose();
     super.dispose();
   }
 
@@ -100,8 +121,15 @@ class OrderProvider with ChangeNotifier {
     return _streamIncomingOffersUseCase(limit: limit);
   }
 
+  // Shared listener + stable Stream instance for the default limit, so the
+  // admin Riders tab (which reads this inside build()) doesn't re-subscribe —
+  // and swap its whole UI for a spinner — on every rebuild.
+  late final SharedStream<List<UserModel>> _deliveryBoys =
+      SharedStream<List<UserModel>>(() => _orderRepository.streamAllDeliveryBoys());
+
   Stream<List<UserModel>> streamAllDeliveryBoys({int limit = 200}) {
-    return _orderRepository.streamAllDeliveryBoys(limit: limit);
+    if (limit != 200) return _orderRepository.streamAllDeliveryBoys(limit: limit);
+    return _deliveryBoys.stream;
   }
 
   /// Places the order via the placeOrder Cloud Function.
@@ -110,6 +138,7 @@ class OrderProvider with ChangeNotifier {
   Future<PlaceOrderResult> createOrder({
     required List<OrderItem> items,
     required String deliveryAddress,
+    String? deliveryInstructions,
     double? latitude,
     double? longitude,
   }) async {
@@ -120,6 +149,7 @@ class OrderProvider with ChangeNotifier {
     final result = await _placeOrderUseCase(
       items: items,
       deliveryAddress: deliveryAddress,
+      deliveryInstructions: deliveryInstructions,
       latitude: latitude,
       longitude: longitude,
     );
@@ -130,6 +160,21 @@ class OrderProvider with ChangeNotifier {
     }
     notifyListeners();
     return result;
+  }
+
+  /// Cancels an active customer order while in 'pending' or 'assigned' state.
+  Future<String?> cancelOrder(String orderId, {String? reason}) async {
+    _isLoading = true;
+    _errorMessage = null;
+    notifyListeners();
+
+    final error = await _orderRepository.cancelOrder(orderId, reason: reason);
+    _isLoading = false;
+    if (error != null) {
+      _errorMessage = error;
+    }
+    notifyListeners();
+    return error;
   }
 
   /// Rider-side delivery confirmation. Returns null on success,
@@ -143,8 +188,16 @@ class OrderProvider with ChangeNotifier {
     return _orderRepository.getOrderOtp(orderId);
   }
 
-  Future<void> updateStatus(String orderId, String status) async {
-    await _updateOrderStatusUseCase(orderId, status);
+  Future<String?> updateStatus(String orderId, String status) async {
+    try {
+      await _updateOrderStatusUseCase(orderId, status);
+      return null;
+    } catch (e) {
+      debugPrint("Failed to update status: $e");
+      // Never surface the raw exception text; the usual cause is the order
+      // having changed underneath the rider (e.g. cancelled by the customer).
+      return "This order may have been cancelled or changed. Go back and check its latest status.";
+    }
   }
 
   Future<void> submitRating(String orderId, int rating, String? comment) async {
@@ -155,6 +208,23 @@ class OrderProvider with ChangeNotifier {
   /// Returns null on success, or a user-readable error (e.g. another rider
   /// already took it).
   Future<String?> acceptOrder(String orderId) => _acceptOrderUseCase(orderId);
+
+  /// Rider reports an assigned/picked-up/out-for-delivery order as
+  /// undeliverable (customer unreachable, refused COD, bad address). Returns
+  /// null on success, or a user-readable error.
+  Future<String?> reportDeliveryFailure(String orderId, String reason) =>
+      _orderRepository.reportDeliveryFailure(orderId, reason);
+
+  /// Admin order interventions — each returns null on success or a
+  /// user-readable error. See the repository for semantics.
+  Future<String?> adminCancelOrder(String orderId, String adminId, String reason) =>
+      _orderRepository.adminCancelOrder(orderId, adminId, reason);
+
+  Future<String?> adminUnassignOrder(String orderId) =>
+      _orderRepository.adminUnassignOrder(orderId);
+
+  Future<String?> resetOtpAttempts(String orderId) =>
+      _orderRepository.resetOtpAttempts(orderId);
 
   Future<void> updateDeliveryBoyActiveStatus(String riderId, bool isActive) async {
     await _orderRepository.updateDeliveryBoyActiveStatus(riderId, isActive);

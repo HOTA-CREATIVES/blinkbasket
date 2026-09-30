@@ -55,7 +55,61 @@ describe("escalateStaleOrders", () => {
     expect(tokens.sort()).toEqual(["local-token", "other-token"]);
   });
 
-  it("keeps re-broadcasting a stale tier-2 order (retries forever)", async () => {
+  it("counts each re-broadcast", async () => {
+    await db.collection("deliveryBoys").doc("rider1").set({
+      isActive: true,
+      onDuty: true,
+      village: "Bhimavaram",
+      fcmTokens: ["t1"],
+    });
+    await db.collection("orders").doc("order1").set({
+      status: "pending",
+      deliveryBoyId: null,
+      village: "Bhimavaram",
+      customerName: "Test Customer",
+      notifyTier: 1,
+      notifiedAt: STALE,
+      broadcastCount: 3,
+    });
+
+    await run();
+
+    const snap = await db.collection("orders").doc("order1").get();
+    expect(snap.data()?.broadcastCount).toBe(4);
+    expect(sendEachForMulticast).toHaveBeenCalledTimes(1);
+  });
+
+  it("stops pushing after the broadcast cap and takes the order out of the escalation query", async () => {
+    await db.collection("deliveryBoys").doc("rider1").set({
+      isActive: true,
+      onDuty: true,
+      village: "Bhimavaram",
+      fcmTokens: ["t1"],
+    });
+    await db.collection("orders").doc("order1").set({
+      status: "pending",
+      deliveryBoyId: null,
+      village: "Bhimavaram",
+      customerName: "Test Customer",
+      notifyTier: 2,
+      notifiedAt: STALE,
+      broadcastCount: 10, // MAX_BROADCASTS
+    });
+
+    await run();
+
+    expect(sendEachForMulticast).not.toHaveBeenCalled();
+    const snap = await db.collection("orders").doc("order1").get();
+    expect(snap.data()?.broadcastExhausted).toBe(true);
+    // Parked in the future so the `notifiedAt <= cutoff` scan stops seeing it.
+    expect(snap.data()?.notifiedAt.toMillis()).toBeGreaterThan(Date.now());
+
+    // A second run does nothing at all.
+    await run();
+    expect(sendEachForMulticast).not.toHaveBeenCalled();
+  });
+
+  it("keeps re-broadcasting a stale tier-2 order until the cap", async () => {
     await db.collection("deliveryBoys").doc("rider1").set({
       isActive: true,
       onDuty: true,

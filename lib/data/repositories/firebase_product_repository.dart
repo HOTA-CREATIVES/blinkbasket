@@ -52,7 +52,10 @@ class FirebaseProductRepository implements ProductRepository {
   Future<void> updateProduct(Product product) async {
     try {
       final dto = ProductDto.fromEntity(product);
-      await _db.collection('products').doc(product.id).update(dto.toMap());
+      // Use toUpdateMapWithoutStock() to prevent stock field overwrites
+      // without a corresponding inventory ledger entry. All stock changes
+      // must go through [adjustStock] which writes an inventoryLogs entry.
+      await _db.collection('products').doc(product.id).update(dto.toUpdateMapWithoutStock());
     } catch (e) {
       throw Exception("Failed to update product: $e");
     }
@@ -61,6 +64,16 @@ class FirebaseProductRepository implements ProductRepository {
   @override
   Future<void> deleteProduct(String id) async {
     try {
+      final doc = await _db.collection('products').doc(id).get();
+      if (doc.exists) {
+        final reserved = (doc.data()?['reservedStock'] as num?)?.toInt() ?? 0;
+        if (reserved > 0) {
+          throw Exception(
+            "Cannot delete product with active reserved stock ($reserved units in pending orders). "
+            "Please wait for orders to complete or cancel them first.",
+          );
+        }
+      }
       await _db.collection('products').doc(id).delete();
     } catch (e) {
       throw Exception("Failed to delete product: $e");
@@ -100,6 +113,7 @@ class FirebaseProductRepository implements ProductRepository {
     required String changeType,
     required String notes,
     required String adminId,
+    String actorType = 'admin',
   }) async {
     try {
       final productRef = _db.collection('products').doc(productId);
@@ -133,7 +147,8 @@ class FirebaseProductRepository implements ProductRepository {
 
         transaction.set(ledgerRef, {
           'productId': productId,
-          'adminId': adminId,
+          'actorId': adminId,
+          'actorType': actorType,
           'changeType': changeType,
           'physicalDelta': physicalDelta,
           'reservedDelta': reservedDelta,

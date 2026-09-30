@@ -53,7 +53,6 @@ class AddressModel {
       'addressLine1': addressLine1,
       if (addressLine2 != null) 'addressLine2': addressLine2,
       'pinCode': pinCode,
-      'pincode': pinCode,
       'village': village,
       'mandal': mandal,
       if (district != null) 'district': district,
@@ -63,6 +62,44 @@ class AddressModel {
       'isDefault': isDefault,
     };
   }
+
+  AddressModel withDefault(bool value) => AddressModel(
+        id: id,
+        name: name,
+        addressLine1: addressLine1,
+        addressLine2: addressLine2,
+        pinCode: pinCode,
+        village: village,
+        mandal: mandal,
+        district: district,
+        landmark: landmark,
+        latitude: latitude,
+        longitude: longitude,
+        isDefault: value,
+      );
+
+  /// Guarantees exactly one default address: keeps the first one already
+  /// flagged (so a freshly-added address the user marked default wins over
+  /// nothing), otherwise promotes the first. Without this, deleting the
+  /// default left no default at all and every caller fell back to `.first`.
+  static List<AddressModel> normalizeDefaults(List<AddressModel> list) {
+    if (list.isEmpty) return list;
+    final defaultIndex = list.indexWhere((a) => a.isDefault);
+    final keep = defaultIndex == -1 ? 0 : defaultIndex;
+    return [
+      for (var i = 0; i < list.length; i++) list[i].withDefault(i == keep),
+    ];
+  }
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is AddressModel &&
+          runtimeType == other.runtimeType &&
+          (id.isNotEmpty ? id == other.id : (name == other.name && addressLine1 == other.addressLine1));
+
+  @override
+  int get hashCode => id.isNotEmpty ? id.hashCode : Object.hash(name, addressLine1);
 }
 
 class UserModel {
@@ -136,6 +173,12 @@ class UserModel {
     this.onDuty = false,
   }) : updatedAt = updatedAt ?? createdAt;
 
+  /// The address flagged default, else the first saved one, else null.
+  AddressModel? get defaultAddress {
+    if (addresses.isEmpty) return null;
+    return addresses.firstWhere((a) => a.isDefault, orElse: () => addresses.first);
+  }
+
   factory UserModel.fromMap(Map<String, dynamic> map, String documentId) {
     final List<dynamic>? addressesRaw = map['addresses'];
     final List<AddressModel> addressesList = addressesRaw != null
@@ -170,18 +213,41 @@ class UserModel {
       fcmTokens: map['fcmTokens'] != null
           ? List<String>.from(map['fcmTokens'] as List)
           : const [],
-      createdAt: map['createdAt'] != null
+      createdAt: map['createdAt'] is Timestamp
           ? (map['createdAt'] as Timestamp).toDate()
-          : DateTime.now(),
-      updatedAt: map['updatedAt'] != null
+          : (map['createdAt'] != null
+              ? DateTime.tryParse(map['createdAt'].toString()) ?? DateTime.now()
+              : DateTime.now()),
+      updatedAt: map['updatedAt'] is Timestamp
           ? (map['updatedAt'] as Timestamp).toDate()
-          : DateTime.now(),
+          : (map['updatedAt'] != null
+              ? DateTime.tryParse(map['updatedAt'].toString()) ?? DateTime.now()
+              : DateTime.now()),
       addresses: addressesList,
       vehicleDetails: map['vehicleDetails'] as String?,
       vehicleNo: map['vehicleNo'] as String?,
       licenseNo: map['licenseNo'] as String?,
       onDuty: map['onDuty'] ?? false,
     );
+  }
+
+  /// Map of user-updatable fields only. Excludes server-managed fields
+  /// like `totalOrders`, `totalSpent`, `firstOrderCompleted`, `fcmTokens`, `createdAt`, `role`, `uid`, `email`.
+  Map<String, dynamic> toProfileUpdateMap() {
+    return {
+      'name': name,
+      'phone': phone,
+      'village': village,
+      if (mandal != null) 'mandal': mandal,
+      if (district != null) 'district': district,
+      if (avatarUrl != null) 'avatarUrl': avatarUrl,
+      'notificationsEnabled': notificationsEnabled,
+      'favoriteProductIds': favoriteProductIds,
+      'onboardingCompleted': onboardingCompleted,
+      'onboardingStep': onboardingStep,
+      'addresses': addresses.map((a) => a.toMap()).toList(),
+      'updatedAt': FieldValue.serverTimestamp(),
+    };
   }
 
   Map<String, dynamic> toMap() {

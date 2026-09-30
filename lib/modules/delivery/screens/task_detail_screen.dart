@@ -10,15 +10,48 @@ import '../../../domain/entities/app_config.dart';
 import '../../../domain/entities/order.dart';
 import '../widgets/otp_verification_grid.dart';
 
+/// Statuses where this order is actually assigned to the viewing rider and
+/// the swipe-to-advance slider makes sense. A still-'pending' order reaching
+/// this screen (e.g. a stale broadcast notification) has no rider action
+/// here — accepting happens from the home Tasks tab's incoming-offers feed.
+const _kAssignedStatuses = {'assigned', 'picked_up', 'out_for_delivery'};
+
+/// Live wrapper: the screen used to render the order snapshot it was opened
+/// with, so a customer/admin cancellation (or any status change) while the
+/// rider was on it left stale swipe controls. The body below is rebuilt with
+/// the latest order on every Firestore update.
 class TaskDetailScreen extends StatefulWidget {
   final Order order;
   const TaskDetailScreen({super.key, required this.order});
 
   @override
-  State<TaskDetailScreen> createState() => _TaskDetailScreenState();
+  State<TaskDetailScreen> createState() => _TaskDetailScreenLiveState();
 }
 
-class _TaskDetailScreenState extends State<TaskDetailScreen> {
+class _TaskDetailScreenLiveState extends State<TaskDetailScreen> {
+  late final Stream<Order> _orderStream =
+      Provider.of<OrderProvider>(context, listen: false).streamOrder(widget.order.id);
+
+  @override
+  Widget build(BuildContext context) {
+    return StreamBuilder<Order>(
+      stream: _orderStream,
+      initialData: widget.order,
+      builder: (context, snapshot) =>
+          _TaskDetailBody(order: snapshot.data ?? widget.order),
+    );
+  }
+}
+
+class _TaskDetailBody extends StatefulWidget {
+  final Order order;
+  const _TaskDetailBody({required this.order});
+
+  @override
+  State<_TaskDetailBody> createState() => _TaskDetailScreenState();
+}
+
+class _TaskDetailScreenState extends State<_TaskDetailBody> {
   // State to track checked items during packing
   final Map<String, bool> _checkedItems = {};
 
@@ -41,12 +74,23 @@ class _TaskDetailScreenState extends State<TaskDetailScreen> {
         return;
       }
     }
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Could not open map application')),
+      );
+    }
   }
 
   Future<void> _callCustomer(String phone) async {
     final clean = phone.replaceAll(RegExp(r'\s+|-'), '');
     final uri = Uri(scheme: 'tel', path: clean);
-    if (await canLaunchUrl(uri)) await launchUrl(uri);
+    if (await canLaunchUrl(uri)) {
+      await launchUrl(uri);
+    } else if (mounted) {
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('Could not place call to $phone')));
+    }
   }
 
   String _getNextStatusText(String status) {
@@ -73,7 +117,123 @@ class _TaskDetailScreenState extends State<TaskDetailScreen> {
     }
   }
 
-  void _showOtpVerification(BuildContext context, OrderProvider orderProvider) {
+  static const _kDeliveryFailureReasons = [
+    'Customer unreachable',
+    'Customer refused delivery',
+    'Wrong or inaccessible address',
+    'Other',
+  ];
+
+  /// Escape hatch for an order that can never actually be handed over —
+  /// without this, an out-for-delivery order with an unreachable customer
+  /// had no way out of that state for the rider (verifyDeliveryOtp is the
+  /// only path to 'delivered', and rules only let a rider advance forward).
+  void _showReportDeliveryFailure(OrderProvider orderProvider) {
+    if (!mounted) return;
+    String selectedReason = _kDeliveryFailureReasons.first;
+    bool isSubmitting = false;
+
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (dialogContext) {
+        return StatefulBuilder(
+          builder: (dialogContext, setDialogState) {
+            return AlertDialog(
+              title: const Text("Can't Deliver This Order?"),
+              content: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text(
+                    'This cancels the order and releases its reserved stock. Pick a reason:',
+                    style: TextStyle(fontSize: 13),
+                  ),
+                  const SizedBox(height: 8),
+                  RadioGroup<String>(
+                    groupValue: selectedReason,
+                    onChanged: (val) {
+                      if (!isSubmitting && val != null) {
+                        setDialogState(() => selectedReason = val);
+                      }
+                    },
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: _kDeliveryFailureReasons.map(
+                        (reason) => RadioListTile<String>(
+                          value: reason,
+                          contentPadding: EdgeInsets.zero,
+                          dense: true,
+                          title: Text(reason, style: const TextStyle(fontSize: 14)),
+                        ),
+                      ).toList(),
+                    ),
+                  ),
+                ],
+              ),
+              actions: [
+                TextButton(
+                  onPressed:
+                      isSubmitting ? null : () => Navigator.pop(dialogContext),
+                  child: const Text('Back'),
+                ),
+                ElevatedButton(
+                  onPressed:
+                      isSubmitting
+                          ? null
+                          : () async {
+                            setDialogState(() => isSubmitting = true);
+                            final error = await orderProvider
+                                .reportDeliveryFailure(
+                                  widget.order.id,
+                                  selectedReason,
+                                );
+                            if (!dialogContext.mounted) return;
+                            Navigator.pop(dialogContext);
+                            if (!mounted) return;
+                            if (error != null) {
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                SnackBar(
+                                  content: Text(error),
+                                  backgroundColor: AppTokens.statusCancelled,
+                                ),
+                              );
+                            } else {
+                              Navigator.pop(context); // back to task list
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                const SnackBar(
+                                  content: Text('Order marked undelivered.'),
+                                  backgroundColor: AppTokens.statusCancelled,
+                                ),
+                              );
+                            }
+                          },
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: AppTokens.statusCancelled,
+                    foregroundColor: Colors.white,
+                  ),
+                  child:
+                      isSubmitting
+                          ? const SizedBox(
+                            width: 16,
+                            height: 16,
+                            child: CircularProgressIndicator(
+                              strokeWidth: 2,
+                              color: Colors.white,
+                            ),
+                          )
+                          : const Text('Confirm'),
+                ),
+              ],
+            );
+          },
+        );
+      },
+    );
+  }
+
+  void _showOtpVerification(OrderProvider orderProvider) {
+    if (!mounted) return;
     showDialog(
       context: context,
       barrierDismissible: false,
@@ -82,6 +242,7 @@ class _TaskDetailScreenState extends State<TaskDetailScreen> {
           orderId: widget.order.id,
           onSuccess: () {
             Navigator.pop(dialogContext); // Close dialog
+            if (!mounted) return;
             Navigator.pop(context); // Go back to Home Tasks
             ScaffoldMessenger.of(context).showSnackBar(
               const SnackBar(
@@ -107,14 +268,14 @@ class _TaskDetailScreenState extends State<TaskDetailScreen> {
     final nextColor = AppTokens.statusColor(nextStatus);
 
     return Scaffold(
-      backgroundColor: Colors.grey.shade50,
+      backgroundColor: scheme.surfaceContainerHighest,
       appBar: AppBar(
         title: Text(
           'Order #${widget.order.id.substring(0, 6).toUpperCase()}',
-          style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 18),
+          style: Theme.of(context).textTheme.titleLarge,
         ),
-        backgroundColor: Colors.white,
-        foregroundColor: Colors.black87,
+        backgroundColor: scheme.surface,
+        foregroundColor: scheme.onSurface,
         elevation: 0.5,
         leading: IconButton(
           icon: const Icon(Icons.arrow_back_ios_new_rounded, size: 20),
@@ -122,93 +283,137 @@ class _TaskDetailScreenState extends State<TaskDetailScreen> {
         ),
       ),
       body: SingleChildScrollView(
-        padding: const EdgeInsets.all(16.0),
+        padding: const EdgeInsets.all(AppTokens.s16),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
+            if (widget.order.status == 'cancelled')
+              Container(
+                width: double.infinity,
+                margin: const EdgeInsets.only(bottom: AppTokens.s12),
+                padding: const EdgeInsets.all(AppTokens.s12),
+                decoration: BoxDecoration(
+                  color: AppTokens.statusCancelled.withValues(alpha: 0.12),
+                  borderRadius: BorderRadius.circular(AppTokens.rMd),
+                ),
+                child: const Text(
+                  'This order was cancelled. No further action is needed — do not deliver it.',
+                  style: TextStyle(
+                    color: AppTokens.statusCancelled,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+              ),
             // Status Card
             Card(
               elevation: 0,
               shape: RoundedRectangleBorder(
                 borderRadius: BorderRadius.circular(AppTokens.rMd),
-                side: BorderSide(color: Colors.grey.shade200),
+                side: BorderSide(color: scheme.outlineVariant),
               ),
-              color: Colors.white,
+              color: scheme.surface,
               child: Padding(
-                padding: const EdgeInsets.all(16.0),
+                padding: const EdgeInsets.all(AppTokens.s16),
                 child: Row(
                   mainAxisAlignment: MainAxisAlignment.spaceBetween,
                   children: [
-                    const Text(
+                    Text(
                       'Delivery Status',
-                      style: TextStyle(fontWeight: FontWeight.bold, fontSize: 15),
+                      style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                        fontWeight: FontWeight.bold,
+                      ),
                     ),
                     StatusChip(status: widget.order.status),
                   ],
                 ),
               ),
             ),
-            const SizedBox(height: 16),
+            const SizedBox(height: AppTokens.s16),
 
             // Customer Details Card
             Card(
               elevation: 0,
               shape: RoundedRectangleBorder(
                 borderRadius: BorderRadius.circular(AppTokens.rMd),
-                side: BorderSide(color: Colors.grey.shade200),
+                side: BorderSide(color: scheme.outlineVariant),
               ),
-              color: Colors.white,
+              color: scheme.surface,
               child: Padding(
-                padding: const EdgeInsets.all(16.0),
+                padding: const EdgeInsets.all(AppTokens.s16),
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Row(
                       children: [
                         Icon(Icons.person_pin_rounded, color: scheme.primary),
-                        const SizedBox(width: 8),
-                        const Text(
+                        const SizedBox(width: AppTokens.s8),
+                        Text(
                           'Customer Details',
-                          style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
+                          style: Theme.of(context).textTheme.titleMedium,
                         ),
                       ],
                     ),
                     const Divider(height: 24),
                     Text(
                       widget.order.customerName,
-                      style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 15),
+                      style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                        fontWeight: FontWeight.bold,
+                      ),
                     ),
-                    const SizedBox(height: 8),
+                    const SizedBox(height: AppTokens.s8),
                     Row(
                       children: [
-                        Icon(Icons.location_on_outlined, size: 18, color: Colors.grey.shade600),
+                        Icon(
+                          Icons.location_on_outlined,
+                          size: 18,
+                          color: scheme.onSurfaceVariant,
+                        ),
                         const SizedBox(width: 6),
                         Expanded(
                           child: Text(
                             '${widget.order.deliveryAddress}, ${widget.order.village}',
-                            style: TextStyle(color: Colors.grey.shade700, fontSize: 14),
+                            style: TextStyle(
+                              color: scheme.onSurfaceVariant,
+                              fontSize: 14,
+                            ),
                           ),
                         ),
                       ],
                     ),
-                    const SizedBox(height: 16),
-                    Row(
+                    const SizedBox(height: AppTokens.s16),                    Row(
                       children: [
-                        if (widget.order.latitude != null && widget.order.longitude != null) ...[
+                        if (widget.order.latitude != null &&
+                            widget.order.longitude != null) ...[
                           Expanded(
                             child: ElevatedButton.icon(
-                              icon: const Icon(Icons.navigation_rounded, size: 18),
-                              label: const Text('NAVIGATE', style: TextStyle(fontWeight: FontWeight.bold)),
+                              icon: const Icon(
+                                Icons.navigation_rounded,
+                                size: 18,
+                              ),
+                              label: const Text(
+                                'NAVIGATE',
+                                style: TextStyle(fontWeight: FontWeight.bold),
+                              ),
                               style: ElevatedButton.styleFrom(
-                                backgroundColor: scheme.primary.withValues(alpha: 0.1),
+                                backgroundColor: scheme.primary.withValues(
+                                  alpha: 0.1,
+                                ),
                                 foregroundColor: scheme.primary,
                                 elevation: 0,
                                 shape: RoundedRectangleBorder(
-                                  borderRadius: BorderRadius.circular(AppTokens.rSm),
+                                  borderRadius: BorderRadius.circular(
+                                    AppTokens.rSm,
+                                  ),
                                 ),
-                                padding: const EdgeInsets.symmetric(vertical: 12),
+                                padding: const EdgeInsets.symmetric(
+                                  vertical: 12,
+                                ),
                               ),
-                              onPressed: () => _launchMap(widget.order.latitude!, widget.order.longitude!),
+                              onPressed:
+                                  () => _launchMap(
+                                    widget.order.latitude!,
+                                    widget.order.longitude!,
+                                  ),
                             ),
                           ),
                           const SizedBox(width: 12),
@@ -216,17 +421,23 @@ class _TaskDetailScreenState extends State<TaskDetailScreen> {
                         Expanded(
                           child: ElevatedButton.icon(
                             icon: const Icon(Icons.call_rounded, size: 18),
-                            label: const Text('CALL CUSTOMER', style: TextStyle(fontWeight: FontWeight.bold)),
+                            label: const Text(
+                              'CALL CUSTOMER',
+                              style: TextStyle(fontWeight: FontWeight.bold),
+                            ),
                             style: ElevatedButton.styleFrom(
-                              backgroundColor: Colors.orange.shade50,
-                              foregroundColor: Colors.orange.shade800,
+                              backgroundColor: scheme.primaryContainer,
+                              foregroundColor: scheme.primary,
                               elevation: 0,
                               shape: RoundedRectangleBorder(
-                                borderRadius: BorderRadius.circular(AppTokens.rSm),
+                                borderRadius: BorderRadius.circular(
+                                  AppTokens.rSm,
+                                ),
                               ),
-                              padding: const EdgeInsets.symmetric(vertical: 12),
+                              padding: const EdgeInsets.symmetric(vertical: AppTokens.s12),
                             ),
-                            onPressed: () => _callCustomer(widget.order.customerPhone),
+                            onPressed:
+                                () => _callCustomer(widget.order.customerPhone),
                           ),
                         ),
                       ],
@@ -236,32 +447,42 @@ class _TaskDetailScreenState extends State<TaskDetailScreen> {
                 ),
               ),
             ),
-            const SizedBox(height: 16),
+            const SizedBox(height: AppTokens.s16),
 
             // COD Collection Card
             Card(
               elevation: 0,
               shape: RoundedRectangleBorder(
                 borderRadius: BorderRadius.circular(AppTokens.rMd),
-                side: BorderSide(color: AppTokens.statusDelivered.withValues(alpha: 0.2)),
+                side: BorderSide(
+                  color: AppTokens.statusDelivered.withValues(alpha: 0.2),
+                ),
               ),
               color: AppTokens.statusDelivered.withValues(alpha: 0.05),
               child: Padding(
-                padding: const EdgeInsets.all(16.0),
+                padding: const EdgeInsets.all(AppTokens.s16),
                 child: Row(
                   children: [
                     const CircleAvatar(
                       backgroundColor: AppTokens.statusDelivered,
                       radius: 18,
-                      child: Icon(Icons.currency_rupee_rounded, color: Colors.white, size: 20),
+                      child: Icon(
+                        Icons.currency_rupee_rounded,
+                        color: Colors.white,
+                        size: 20,
+                      ),
                     ),
-                    const SizedBox(width: 12),
+                    const SizedBox(width: AppTokens.s12),
                     Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        const Text(
+                        Text(
                           'Cash to Collect (COD)',
-                          style: TextStyle(color: Colors.black54, fontSize: 13, fontWeight: FontWeight.w500),
+                          style: TextStyle(
+                            color: scheme.onSurfaceVariant,
+                            fontSize: 13,
+                            fontWeight: FontWeight.w500,
+                          ),
                         ),
                         const SizedBox(height: 2),
                         Text(
@@ -278,54 +499,64 @@ class _TaskDetailScreenState extends State<TaskDetailScreen> {
                 ),
               ),
             ),
-            const SizedBox(height: 16),
+            const SizedBox(height: AppTokens.s16),
 
             // Items Checklist Card
             Card(
               elevation: 0,
               shape: RoundedRectangleBorder(
                 borderRadius: BorderRadius.circular(AppTokens.rMd),
-                side: BorderSide(color: Colors.grey.shade200),
+                side: BorderSide(color: scheme.outlineVariant),
               ),
-              color: Colors.white,
+              color: scheme.surface,
               child: Padding(
-                padding: const EdgeInsets.all(16.0),
+                padding: const EdgeInsets.all(AppTokens.s16),
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Row(
                       mainAxisAlignment: MainAxisAlignment.spaceBetween,
                       children: [
-                        const Row(
+                        Row(
                           children: [
-                            Icon(Icons.fact_check_outlined, color: Colors.blue),
-                            SizedBox(width: 8),
+                            Icon(Icons.fact_check_outlined, color: scheme.primary),
+                            const SizedBox(width: AppTokens.s8),
                             Text(
                               'Items Checklist',
-                              style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
+                              style: Theme.of(context).textTheme.titleMedium,
                             ),
                           ],
                         ),
                         Text(
                           '${widget.order.items.length} items',
-                          style: const TextStyle(color: Colors.grey, fontSize: 13),
+                          style: TextStyle(
+                            color: scheme.onSurfaceVariant,
+                            fontSize: 13,
+                          ),
                         ),
                       ],
                     ),
                     const Divider(height: 24),
                     const Text(
                       'Verify and check off all items before departing:',
-                      style: TextStyle(color: Colors.black54, fontSize: 13, fontStyle: FontStyle.italic),
+                      style: TextStyle(
+                        color: Colors.black54,
+                        fontSize: 13,
+                        fontStyle: FontStyle.italic,
+                      ),
                     ),
-                    const SizedBox(height: 12),
+                    const SizedBox(height: AppTokens.s12),
                     ListView.separated(
                       shrinkWrap: true,
                       physics: const NeverScrollableScrollPhysics(),
                       itemCount: widget.order.items.length,
-                      separatorBuilder: (_, __) => Divider(color: Colors.grey.shade100, height: 1),
+                      separatorBuilder:
+                          (_, __) =>
+                              Divider(color: scheme.outlineVariant, height: 1),
                       itemBuilder: (context, idx) {
                         final item = widget.order.items[idx];
-                        final isChecked = _checkedItems[item.productId] ?? false;
+                        final isChecked =
+                            _checkedItems[item.productId] ?? false;
 
                         return CheckboxListTile(
                           contentPadding: EdgeInsets.zero,
@@ -334,15 +565,19 @@ class _TaskDetailScreenState extends State<TaskDetailScreen> {
                             style: TextStyle(
                               fontWeight: FontWeight.bold,
                               fontSize: 14,
-                              decoration: isChecked ? TextDecoration.lineThrough : null,
-                              color: isChecked ? Colors.grey : Colors.black87,
+                              decoration:
+                                  isChecked ? TextDecoration.lineThrough : null,
+                              color: isChecked ? scheme.onSurfaceVariant : scheme.onSurface,
                             ),
                           ),
                           subtitle: Text(
                             'Quantity: ${item.quantity}  •  ₹${item.price.toStringAsFixed(1)} / unit',
                             style: TextStyle(
                               fontSize: 12,
-                              color: isChecked ? Colors.grey.shade400 : Colors.grey.shade600,
+                              color:
+                                  isChecked
+                                      ? scheme.onSurfaceVariant.withValues(alpha: 0.5)
+                                      : scheme.onSurfaceVariant,
                             ),
                           ),
                           value: isChecked,
@@ -363,38 +598,110 @@ class _TaskDetailScreenState extends State<TaskDetailScreen> {
           ],
         ),
       ),
-      bottomSheet: widget.order.status != 'delivered' && widget.order.status != 'cancelled'
-          ? Container(
-              color: Colors.white,
-              padding: const EdgeInsets.symmetric(horizontal: 24.0, vertical: 16.0),
-              child: SafeArea(
-                child: SwipeToConfirmSlider(
-                  text: _getNextStatusText(widget.order.status),
-                  color: nextColor,
-                  onSwipeCompleted: () async {
-                    final messenger = ScaffoldMessenger.of(context);
-                    final navigator = Navigator.of(context);
-                    if (nextStatus == 'delivered') {
-                      _showOtpVerification(context, orderProvider);
-                    } else {
-                      await orderProvider.updateStatus(widget.order.id, nextStatus);
-                      navigator.pop(); // Return to list view
-                      messenger.showSnackBar(
-                        SnackBar(
-                          content: Text(
-                            'Status updated to: ${nextStatus.toUpperCase()}',
-                            style: const TextStyle(fontWeight: FontWeight.bold),
-                          ),
-                          backgroundColor: nextColor,
-                          behavior: SnackBarBehavior.floating,
-                        ),
-                      );
-                    }
-                  },
+      bottomSheet:
+          _kAssignedStatuses.contains(widget.order.status)
+              ? Container(
+                color: scheme.surface,
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 24.0,
+                  vertical: AppTokens.s16,
                 ),
-              ),
-            )
-          : null,
+                child: SafeArea(
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      OutlinedButton.icon(
+                        onPressed:
+                            () => _showReportDeliveryFailure(orderProvider),
+                        style: OutlinedButton.styleFrom(
+                          foregroundColor: scheme.error,
+                          side: BorderSide(color: scheme.error.withValues(alpha: 0.5)),
+                          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                          shape: const StadiumBorder(),
+                        ),
+                        icon: const Icon(Icons.cancel_outlined, size: 16),
+                        label: const Text(
+                          "Cancel Delivery / Report Failure",
+                          style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13),
+                        ),
+                      ),
+                      const SizedBox(height: AppTokens.s8),
+                      SwipeToConfirmSlider(
+                        text: _getNextStatusText(widget.order.status),
+                        color: nextColor,
+                        onSwipeCompleted: () async {
+                          final messenger = ScaffoldMessenger.of(context);
+                          final navigator = Navigator.of(context);
+
+                          if (nextStatus == 'delivered') {
+                            if (!mounted) return;
+                            _showOtpVerification(orderProvider);
+                          } else {
+                            // The item checklist is a pickup step (the rider
+                            // is in the store) — gate it here, not at the
+                            // customer's door.
+                            if (nextStatus == 'picked_up' &&
+                                _checkedItems.values.any((checked) => !checked)) {
+                              final proceed = await showDialog<bool>(
+                                context: context,
+                                builder:
+                                    (dialogCtx) => AlertDialog(
+                                      title: const Text('Unchecked Items'),
+                                      content: const Text(
+                                        'Some items in the checklist are not checked off yet. Have you collected all items?',
+                                      ),
+                                      actions: [
+                                        TextButton(
+                                          onPressed:
+                                              () => Navigator.pop(dialogCtx, false),
+                                          child: const Text('Review Checklist'),
+                                        ),
+                                        ElevatedButton(
+                                          onPressed:
+                                              () => Navigator.pop(dialogCtx, true),
+                                          child: const Text('Pick Up Anyway'),
+                                        ),
+                                      ],
+                                    ),
+                              );
+                              if (proceed != true || !mounted) return;
+                            }
+                            final err = await orderProvider.updateStatus(
+                              widget.order.id,
+                              nextStatus,
+                            );
+                            if (!mounted) return;
+                            if (err != null) {
+                              messenger.showSnackBar(
+                                SnackBar(
+                                  content: Text('Failed to update status: $err'),
+                                  backgroundColor: Colors.red,
+                                  behavior: SnackBarBehavior.floating,
+                                ),
+                              );
+                              return;
+                            }
+                            navigator.pop(); // Return to list view
+                            messenger.showSnackBar(
+                              SnackBar(
+                                content: Text(
+                                  'Status updated to: ${nextStatus.replaceAll("_", " ").toUpperCase()}',
+                                  style: const TextStyle(
+                                    fontWeight: FontWeight.bold,
+                                  ),
+                                ),
+                                backgroundColor: nextColor,
+                                behavior: SnackBarBehavior.floating,
+                              ),
+                            );
+                          }
+                        },
+                      ),
+                    ],
+                  ),
+                ),
+              )
+              : null,
     );
   }
 }
@@ -415,7 +722,8 @@ class _ContactDispatchButton extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return StreamBuilder<AppConfig>(
-      stream: Provider.of<ConfigProvider>(context, listen: false).streamAppConfig(),
+      stream:
+          Provider.of<ConfigProvider>(context, listen: false).streamAppConfig(),
       builder: (context, snapshot) {
         final phone = snapshot.data?.supportPhone;
         if (phone == null || phone.isEmpty) return const SizedBox.shrink();
@@ -426,7 +734,10 @@ class _ContactDispatchButton extends StatelessWidget {
             child: TextButton.icon(
               onPressed: () => _callSupport(phone),
               icon: const Icon(Icons.support_agent_rounded, size: 16),
-              label: const Text('Contact Dispatch', style: TextStyle(fontWeight: FontWeight.bold)),
+              label: const Text(
+                'Contact Dispatch',
+                style: TextStyle(fontWeight: FontWeight.bold),
+              ),
             ),
           ),
         );

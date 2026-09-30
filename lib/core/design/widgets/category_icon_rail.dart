@@ -70,15 +70,7 @@ class CategoryIconRail extends StatelessWidget {
                         color: isSelected ? scheme.primary : scheme.outlineVariant,
                         width: 1,
                       ),
-                      boxShadow: isSelected
-                          ? [
-                              BoxShadow(
-                                color: scheme.primary.withValues(alpha: 0.25),
-                                blurRadius: 8,
-                                offset: const Offset(0, 4),
-                              )
-                            ]
-                          : null,
+                      boxShadow: isSelected ? AppTokens.shadowMd(scheme.primary) : null,
                     ),
                     child: Icon(
                       _iconForCategory(category),
@@ -89,11 +81,10 @@ class CategoryIconRail extends StatelessWidget {
                   const SizedBox(height: 6),
                   Text(
                     category,
-                    style: TextStyle(
-                      fontSize: 11,
-                      fontWeight: isSelected ? FontWeight.bold : FontWeight.w500,
-                      color: isSelected ? scheme.primary : scheme.onSurface,
-                    ),
+                    style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                          fontWeight: isSelected ? FontWeight.w800 : FontWeight.w500,
+                          color: isSelected ? scheme.primary : scheme.onSurface,
+                        ),
                   ),
                 ],
               ),

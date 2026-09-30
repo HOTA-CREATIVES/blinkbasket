@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_svg/flutter_svg.dart';
 import '../app_tokens.dart';
 
 /// Friendly empty / error placeholder with an optional action.
@@ -10,6 +11,12 @@ class EmptyState extends StatelessWidget {
   final VoidCallback? onAction;
   final bool isError;
 
+  /// Optional bundled SVG (e.g. from `assets/svgs/`) shown instead of the
+  /// icon-in-a-circle treatment, for the handful of empty states that have
+  /// a genuine illustration to match — most should leave this null and use
+  /// the icon fallback rather than force-fitting an unrelated illustration.
+  final String? illustrationAsset;
+
   const EmptyState({
     super.key,
     required this.icon,
@@ -18,6 +25,7 @@ class EmptyState extends StatelessWidget {
     this.actionLabel,
     this.onAction,
     this.isError = false,
+    this.illustrationAsset,
   });
 
   const EmptyState.error({
@@ -27,7 +35,8 @@ class EmptyState extends StatelessWidget {
     this.actionLabel = 'Retry',
     this.onAction,
   })  : icon = Icons.cloud_off_rounded,
-        isError = true;
+        isError = true,
+        illustrationAsset = null;
 
   @override
   Widget build(BuildContext context) {
@@ -40,14 +49,17 @@ class EmptyState extends StatelessWidget {
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            Container(
-              padding: const EdgeInsets.all(AppTokens.s20),
-              decoration: BoxDecoration(
-                color: tint.withValues(alpha: 0.08),
-                shape: BoxShape.circle,
+            if (illustrationAsset != null)
+              SvgPicture.asset(illustrationAsset!, height: 140)
+            else
+              Container(
+                padding: const EdgeInsets.all(AppTokens.s20),
+                decoration: BoxDecoration(
+                  color: tint.withValues(alpha: 0.08),
+                  shape: BoxShape.circle,
+                ),
+                child: Icon(icon, size: 44, color: tint),
               ),
-              child: Icon(icon, size: 44, color: tint),
-            ),
             const SizedBox(height: AppTokens.s16),
             Text(
               title,

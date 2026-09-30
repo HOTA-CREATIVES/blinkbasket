@@ -61,7 +61,11 @@ class ProductDto extends Product {
     );
   }
 
-  Map<String, dynamic> toMap() {
+  /// Full document map including `createdAt`. Use only when creating a new product.
+  Map<String, dynamic> toMap() => toCreateMap();
+
+  /// Full document map including `createdAt`. Use for new product creation.
+  Map<String, dynamic> toCreateMap() {
     return {
       'name': name,
       'description': description,
@@ -84,6 +88,57 @@ class ProductDto extends Product {
       if (rating != null) 'rating': rating,
       if (reviewCount != null) 'reviewCount': reviewCount,
       'createdAt': FieldValue.serverTimestamp(),
+      'updatedAt': FieldValue.serverTimestamp(),
+    };
+  }
+
+  /// Update map that preserves `createdAt`. Use for product edits.
+  Map<String, dynamic> toUpdateMap() {
+    return {
+      'name': name,
+      'description': description,
+      'price': price,
+      if (discountedPrice != null) 'discountedPrice': discountedPrice,
+      'imageUrl': imageUrl,
+      'imageUrls': imageUrls,
+      'category': category,
+      'stock': stock,
+      'unit': unit,
+      'requiresPrescription': requiresPrescription,
+      'physicalStock': physicalStock,
+      'reservedStock': reservedStock,
+      'availableStock': availableStock,
+      'lowStockThreshold': lowStockThreshold,
+      'isAvailable': isAvailable,
+      'isFeatured': isFeatured,
+      'tags': tags,
+      if (brand != null) 'brand': brand,
+      if (rating != null) 'rating': rating,
+      if (reviewCount != null) 'reviewCount': reviewCount,
+      'updatedAt': FieldValue.serverTimestamp(),
+    };
+  }
+
+  /// Update map that excludes stock fields — forces stock changes to go
+  /// through [ProductRepository.adjustStock] and the inventory ledger.
+  Map<String, dynamic> toUpdateMapWithoutStock() {
+    return {
+      'name': name,
+      'description': description,
+      'price': price,
+      if (discountedPrice != null) 'discountedPrice': discountedPrice,
+      'imageUrl': imageUrl,
+      'imageUrls': imageUrls,
+      'category': category,
+      'unit': unit,
+      'requiresPrescription': requiresPrescription,
+      'lowStockThreshold': lowStockThreshold,
+      'isAvailable': isAvailable,
+      'isFeatured': isFeatured,
+      'tags': tags,
+      if (brand != null) 'brand': brand,
+      if (rating != null) 'rating': rating,
+      if (reviewCount != null) 'reviewCount': reviewCount,
       'updatedAt': FieldValue.serverTimestamp(),
     };
   }

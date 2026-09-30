@@ -19,10 +19,13 @@ class Order {
   final String customerPhone;
   final String? addressId;
   final String deliveryAddress;
+  final String? deliveryInstructions;
   final String village;
   final double? latitude;
   final double? longitude;
   final List<OrderItem> items;
+  final double subtotal;
+  final double deliveryFee;
   final double totalAmount;
   final String paymentMethod;
   final String paymentStatus; // 'pending', 'paid', 'failed', 'refunded'
@@ -37,6 +40,12 @@ class Order {
   final int? rating;
   final String? ratingComment;
   final int? notifyTier;
+  final String? cancelReason;
+  final String? cancelledBy; // 'customer', 'admin', 'system'
+
+  /// What the rider is paid for this delivery, frozen by the server at the
+  /// moment of delivery (null until delivered, and on orders that predate it).
+  final double? riderPayout;
 
   // Backward compatibility getters
   String? get deliveryBoyId => deliveryPartnerId;
@@ -50,10 +59,13 @@ class Order {
     required this.customerPhone,
     this.addressId,
     required this.deliveryAddress,
+    this.deliveryInstructions,
     required this.village,
     this.latitude,
     this.longitude,
     required this.items,
+    this.subtotal = 0.0,
+    this.deliveryFee = 0.0,
     required this.totalAmount,
     required this.paymentMethod,
     this.paymentStatus = 'pending',
@@ -71,6 +83,9 @@ class Order {
     this.rating,
     this.ratingComment,
     this.notifyTier,
+    this.cancelReason,
+    this.cancelledBy,
+    this.riderPayout,
   })  : deliveryPartnerId = deliveryPartnerId ?? deliveryBoyId,
         deliveryPartnerName = deliveryPartnerName ?? deliveryBoyName,
         deliveryPartnerPhone = deliveryPartnerPhone ?? deliveryBoyPhone;

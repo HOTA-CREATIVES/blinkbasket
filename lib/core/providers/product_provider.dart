@@ -56,7 +56,14 @@ class ProductProvider with ChangeNotifier {
         _latestProducts = products;
         _productsController.add(products);
       },
-      onError: _productsController.addError,
+      onError: (Object error, StackTrace stack) {
+        _productsController.addError(error, stack);
+        // A failed Firestore listener never recovers by itself — drop it so
+        // the next streamProducts() call (i.e. the next rebuild) reconnects.
+        _productsSub?.cancel();
+        _productsSub = null;
+        _latestProducts = null;
+      },
     );
   }
 
@@ -66,6 +73,10 @@ class ProductProvider with ChangeNotifier {
     _productsController.close();
     super.dispose();
   }
+
+  /// One-off live lookup (current price/stock), for flows like reorder that
+  /// must not trust a possibly stale snapshot.
+  Future<Product?> getProductById(String id) => _productRepository.getProductById(id);
 
   Future<bool> addProduct(Product product) async {
     _isLoading = true;

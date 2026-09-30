@@ -1,5 +1,5 @@
 import 'dart:async';
-import 'package:flutter/material.dart';
+import 'package:flutter/foundation.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import '../models/user_model.dart';
 import '../../domain/repositories/auth_repository.dart';
@@ -9,7 +9,6 @@ import '../../domain/usecases/auth/register_customer_usecase.dart';
 import '../../domain/usecases/auth/setup_customer_profile_usecase.dart';
 import '../../domain/usecases/auth/logout_usecase.dart';
 import '../../domain/usecases/auth/discover_user_role_usecase.dart';
-import '../../data/repositories/firebase_auth_repository.dart';
 import '../services/push_notification_service.dart';
 
 enum AuthStatus {
@@ -21,7 +20,7 @@ enum AuthStatus {
 }
 
 class AuthProvider extends ChangeNotifier {
-  final AuthRepository _authRepository = FirebaseAuthRepository();
+  final AuthRepository _authRepository;
 
   late final LoginWithEmailUseCase _loginWithEmailUseCase;
   late final LoginWithGoogleUseCase _loginWithGoogleUseCase;
@@ -34,8 +33,11 @@ class AuthProvider extends ChangeNotifier {
   UserModel? _currentUserModel;
   bool _isLoading = false;
   String? _errorMessage;
+  StreamSubscription<User?>? _authSub;
+  Timer? _tokenRefreshTicker;
 
-  AuthProvider() {
+  AuthProvider({AuthRepository? repository})
+      : _authRepository = repository ?? _defaultRepository() {
     _loginWithEmailUseCase = LoginWithEmailUseCase(_authRepository);
     _loginWithGoogleUseCase = LoginWithGoogleUseCase(_authRepository);
     _registerCustomerUseCase = RegisterCustomerUseCase(_authRepository);
@@ -43,7 +45,23 @@ class AuthProvider extends ChangeNotifier {
     _logoutUseCase = LogoutUseCase(_authRepository);
     _discoverUserRoleUseCase = DiscoverUserRoleUseCase(_authRepository);
 
-    _authRepository.authStateChanges.listen(_onAuthStateChanged);
+    _authSub = _authRepository.authStateChanges.listen(_onAuthStateChanged);
+    // Token-refresh re-evaluation: Firebase Auth tokens expire after ~1h.
+    // Refresh events don't emit on `authStateChanges` (only sign-in/out do),
+    // so poll on a slow cadence and re-resolve the live role from Firestore.
+    _tokenRefreshTicker = Timer.periodic(
+      const Duration(minutes: 5),
+      (_) => _onAuthStateChanged(_authRepository.currentUser, forceRefresh: true),
+    );
+  }
+
+  static AuthRepository _defaultRepository() {
+    // Lazy import to avoid a hard dep on firebase in unit tests; tests must
+    // always inject a fake via the constructor.
+    throw UnimplementedError(
+      'AuthProvider needs an injected AuthRepository. '
+      'Wire one in main.dart MultiProvider.',
+    );
   }
 
   // Getters
@@ -51,7 +69,6 @@ class AuthProvider extends ChangeNotifier {
   UserModel? get currentUserModel => _currentUserModel;
   bool get isLoading => _isLoading;
   String? get errorMessage => _errorMessage;
-  String? get selectedRole => _currentUserModel?.role;
   bool get isAuthenticated => _status == AuthStatus.authenticated;
 
   void updateCurrentUserModel(UserModel updatedUser) {
@@ -129,10 +146,22 @@ class AuthProvider extends ChangeNotifier {
     return false;
   }
 
+  Future<bool> sendPasswordReset(String email) async {
+    _setLoading(true);
+    _errorMessage = null;
+    final ok = await _authRepository.sendPasswordReset(email);
+    _setLoading(false);
+    if (!ok) {
+      _errorMessage =
+          "We couldn't send a reset email. Check the address and try again.";
+    }
+    return ok;
+  }
+
   Future<bool> setupCustomerProfile({
     required String name,
-    required String village,
     required String phone,
+    required String village,
     String? mandal,
     String? district,
     String? deliveryZoneId,
@@ -147,7 +176,8 @@ class AuthProvider extends ChangeNotifier {
 
     _setLoading(true);
     final now = DateTime.now();
-    final List<AddressModel> initialAddresses = defaultAddress != null ? [defaultAddress] : [];
+    final List<AddressModel> initialAddresses =
+        defaultAddress != null ? [defaultAddress] : const [];
 
     final userModel = UserModel(
       uid: user.uid,
@@ -155,16 +185,17 @@ class AuthProvider extends ChangeNotifier {
       name: name,
       email: user.email ?? '',
       phone: phone,
+      avatarUrl: _currentUserModel?.avatarUrl ?? user.photoURL,
       village: village,
-      mandal: mandal ?? 'Undi',
-      district: district ?? 'West Godavari',
+      mandal: mandal ?? '',
+      district: district ?? '',
       deliveryAvailable: deliveryAvailable,
-      deliveryZoneId: deliveryZoneId ?? 'zone_west_godavari_1',
+      deliveryZoneId: deliveryZoneId ?? '',
       role: 'customer',
       isActive: true,
       onboardingCompleted: true,
       onboardingStep: 3,
-      createdAt: now,
+      createdAt: _currentUserModel?.createdAt ?? now,
       updatedAt: now,
       addresses: initialAddresses,
     );
@@ -183,67 +214,73 @@ class AuthProvider extends ChangeNotifier {
     }
   }
 
-  Future<bool> addAddress(AddressModel address) async {
-    if (_currentUserModel == null) {
-      _errorMessage = "No authenticated user profile found.";
-      return false;
-    }
-    final updatedAddresses = List<AddressModel>.from(_currentUserModel!.addresses)..add(address);
-    final updatedUser = _currentUserModel!.copyWith(addresses: updatedAddresses);
-    return await _updateUserModel(updatedUser);
-  }
-
-  Future<bool> updateAddress(AddressModel address) async {
-    if (_currentUserModel == null) {
-      _errorMessage = "No authenticated user profile found.";
-      return false;
-    }
-    final updatedAddresses = _currentUserModel!.addresses.map((a) {
-      return a.id == address.id ? address : a;
-    }).toList();
-    final updatedUser = _currentUserModel!.copyWith(addresses: updatedAddresses);
-    return await _updateUserModel(updatedUser);
-  }
-
-  Future<bool> deleteAddress(String addressId) async {
-    if (_currentUserModel == null) {
-      _errorMessage = "No authenticated user profile found.";
-      return false;
-    }
-    final updatedAddresses = _currentUserModel!.addresses.where((a) => a.id != addressId).toList();
-    final updatedUser = _currentUserModel!.copyWith(addresses: updatedAddresses);
-    return await _updateUserModel(updatedUser);
-  }
-
-  Future<bool> _updateUserModel(UserModel userModel) async {
-    _setLoading(true);
-    final success = await _setupCustomerProfileUseCase(userModel);
-    if (success) {
-      _currentUserModel = userModel;
-      _setLoading(false);
-      notifyListeners();
-      return true;
-    } else {
-      _errorMessage = "Failed to update address.";
-      _setLoading(false);
-      return false;
-    }
-  }
-
   Future<void> logout() async {
     _setLoading(true);
-    await PushNotificationService.instance.unregisterCurrentDevice(_currentUserModel);
+    await PushNotificationService.instance
+        .unregisterCurrentDevice(_currentUserModel);
     await _logoutUseCase();
     _currentUserModel = null;
     _status = AuthStatus.unauthenticated;
     _setLoading(false);
   }
 
-  Future<bool> _discoverRoleAndInitialize(User user) async {
+  Future<bool> deleteAccount() async {
+    _setLoading(true);
+    _errorMessage = null;
+    try {
+      await PushNotificationService.instance
+          .unregisterCurrentDevice(_currentUserModel);
+      final error = await _authRepository.deleteAccount();
+      if (error == null) {
+        _currentUserModel = null;
+        _status = AuthStatus.unauthenticated;
+        _setLoading(false);
+        return true;
+      } else {
+        _errorMessage = error;
+        _setLoading(false);
+        return false;
+      }
+    } catch (e) {
+      _errorMessage = "Account deletion failed: $e";
+      _setLoading(false);
+      return false;
+    }
+  }
+
+  // Both an explicit loginWith*() call and the authStateChanges listener
+  // race to call this on a fresh sign-in — collapse concurrent calls into
+  // the one in-flight run so role discovery / push registration / stub
+  // writes never fire twice for the same sign-in.
+  Future<bool>? _discoverInFlight;
+
+  Future<bool> _discoverRoleAndInitialize(User user) {
+    return _discoverInFlight ??=
+        _doDiscoverRoleAndInitialize(user).whenComplete(() {
+      _discoverInFlight = null;
+    });
+  }
+
+  Future<bool> _doDiscoverRoleAndInitialize(User user) async {
     try {
       final model = await _discoverUserRoleUseCase(user.uid, user.email ?? '');
 
       if (model == null) {
+        _currentUserModel = UserModel(
+          uid: user.uid,
+          docId: user.uid,
+          name: user.displayName ?? '',
+          email: user.email ?? '',
+          phone: user.phoneNumber ?? '',
+          avatarUrl: user.photoURL,
+          village: '',
+          role: 'customer',
+          isActive: true,
+          onboardingCompleted: false,
+          onboardingStep: 1,
+          createdAt: DateTime.now(),
+          updatedAt: DateTime.now(),
+        );
         _status = AuthStatus.needsProfileSetup;
         _setLoading(false);
         notifyListeners();
@@ -263,7 +300,8 @@ class AuthProvider extends ChangeNotifier {
         if (model.role == 'customer') {
           _errorMessage = "Your account is deactivated. Contact support.";
         } else if (model.role == 'delivery') {
-          _errorMessage = "Delivery partner account is inactive. Contact Admin.";
+          _errorMessage =
+              "Delivery partner account is inactive. Contact Admin.";
         } else if (model.role == 'admin') {
           _errorMessage = "Administrator account is inactive.";
         } else {
@@ -274,17 +312,18 @@ class AuthProvider extends ChangeNotifier {
       }
 
       if (model.role == 'delivery') {
-        if (model.uid.isEmpty) {
-          await _authRepository.saveDeliveryBoyUid(model.docId ?? model.uid, user.uid);
-          _currentUserModel = model.copyWith(uid: user.uid);
-        } else if (model.uid != user.uid) {
+        // All riders are provisioned via createRiderLogin (docId == UID).
+        // If the doc was found by email lookup and the UID doesn't match yet,
+        // the rider needs to be re-provisioned by an admin — there is no
+        // client-side migration path.
+        if (model.uid.isEmpty || model.uid != user.uid) {
           await logout();
-          _errorMessage = "Credential mismatch. Contact Admin.";
+          _errorMessage =
+              "Account configuration error. Contact admin to re-provision your login.";
           _setLoading(false);
           return false;
-        } else {
-          _currentUserModel = model;
         }
+        _currentUserModel = model;
       } else {
         _currentUserModel = model;
       }
@@ -294,12 +333,15 @@ class AuthProvider extends ChangeNotifier {
       notifyListeners();
 
       if (model.role != 'admin') {
-        unawaited(PushNotificationService.instance.registerForUser(_currentUserModel!));
+        unawaited(
+          PushNotificationService.instance.registerForUser(_currentUserModel!),
+        );
       }
       return true;
     } catch (e) {
+      debugPrint('_discoverRoleAndInitialize error: $e');
       await logout();
-      _errorMessage = "Verification error: $e";
+      _errorMessage = "Something went wrong while signing you in. Please try again.";
       _setLoading(false);
       return false;
     }
@@ -309,15 +351,20 @@ class AuthProvider extends ChangeNotifier {
     final user = _authRepository.currentUser;
     final role = _currentUserModel?.role;
     if (user != null && role != null) {
-      final model = await _authRepository.getUserProfile(user.uid, role);
+      final model = await _authRepository.refreshUserProfile(user.uid, role);
       if (model != null) {
+        if (!model.isActive) {
+          await logout();
+          return;
+        }
         _currentUserModel = model;
         notifyListeners();
       }
     }
   }
 
-  Future<void> _onAuthStateChanged(User? user) async {
+  Future<void> _onAuthStateChanged(User? user,
+      {bool forceRefresh = false}) async {
     if (user == null) {
       _status = AuthStatus.unauthenticated;
       _currentUserModel = null;
@@ -325,7 +372,26 @@ class AuthProvider extends ChangeNotifier {
       return;
     }
 
-    if (_status == AuthStatus.uninitialized || _status == AuthStatus.unauthenticated) {
+    // Token-refresh ticks ask for a live re-resolution so role flips made
+    // from the admin console (e.g. rider deactivation) take effect without
+    // forcing a logout.
+    if (forceRefresh && _currentUserModel != null) {
+      final role = _currentUserModel!.role;
+      final live = await _authRepository.refreshUserProfile(user.uid, role);
+      if (live != null && !live.isActive) {
+        await logout();
+        _errorMessage = "Your account was deactivated. Contact support.";
+        return;
+      }
+      if (live != null) {
+        _currentUserModel = live;
+        notifyListeners();
+      }
+      return;
+    }
+
+    if (_status == AuthStatus.uninitialized ||
+        _status == AuthStatus.unauthenticated) {
       await _discoverRoleAndInitialize(user);
     }
   }
@@ -333,5 +399,22 @@ class AuthProvider extends ChangeNotifier {
   void _setLoading(bool value) {
     _isLoading = value;
     notifyListeners();
+  }
+
+  bool _isDisposed = false;
+
+  @override
+  void notifyListeners() {
+    if (!_isDisposed) {
+      super.notifyListeners();
+    }
+  }
+
+  @override
+  void dispose() {
+    _isDisposed = true;
+    _authSub?.cancel();
+    _tokenRefreshTicker?.cancel();
+    super.dispose();
   }
 }

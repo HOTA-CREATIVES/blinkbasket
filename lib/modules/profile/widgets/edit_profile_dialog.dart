@@ -1,8 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
+import '../../../core/design/app_tokens.dart';
 import '../../../core/models/user_model.dart';
 import '../../../core/providers/profile_provider.dart';
-import '../../auth/widgets/village_dropdown.dart';
 
 class EditProfileDialog extends StatefulWidget {
   final UserModel user;
@@ -17,26 +17,27 @@ class _EditProfileDialogState extends State<EditProfileDialog> {
   final _formKey = GlobalKey<FormState>();
   late final TextEditingController _nameController;
   late final TextEditingController _phoneController;
+  late final TextEditingController _villageController;
   late final TextEditingController _vehicleDetailsController;
   late final TextEditingController _vehicleNoController;
   late final TextEditingController _licenseNoController;
-  String? _selectedVillage;
 
   @override
   void initState() {
     super.initState();
     _nameController = TextEditingController(text: widget.user.name);
     _phoneController = TextEditingController(text: widget.user.phone);
+    _villageController = TextEditingController(text: widget.user.village);
     _vehicleDetailsController = TextEditingController(text: widget.user.vehicleDetails ?? '');
     _vehicleNoController = TextEditingController(text: widget.user.vehicleNo ?? '');
     _licenseNoController = TextEditingController(text: widget.user.licenseNo ?? '');
-    _selectedVillage = widget.user.village.isNotEmpty ? widget.user.village : null;
   }
 
   @override
   void dispose() {
     _nameController.dispose();
     _phoneController.dispose();
+    _villageController.dispose();
     _vehicleDetailsController.dispose();
     _vehicleNoController.dispose();
     _licenseNoController.dispose();
@@ -51,7 +52,7 @@ class _EditProfileDialogState extends State<EditProfileDialog> {
     final success = await profileProvider.updateProfileDetails(
       name: _nameController.text.trim(),
       phone: _phoneController.text.trim(),
-      village: _selectedVillage ?? '',
+      village: _villageController.text.trim(),
       vehicleDetails: widget.user.role == 'delivery' ? _vehicleDetailsController.text.trim() : null,
       vehicleNo: widget.user.role == 'delivery' ? _vehicleNoController.text.trim().toUpperCase() : null,
       licenseNo: widget.user.role == 'delivery' ? _licenseNoController.text.trim().toUpperCase() : null,
@@ -60,10 +61,11 @@ class _EditProfileDialogState extends State<EditProfileDialog> {
     if (success && mounted) {
       Navigator.of(context).pop(true);
     } else if (mounted) {
+      final scheme = Theme.of(context).colorScheme;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text(profileProvider.errorMessage ?? "Failed to update profile"),
-          backgroundColor: Colors.red.shade700,
+          backgroundColor: scheme.error,
           behavior: SnackBarBehavior.floating,
         ),
       );
@@ -73,19 +75,20 @@ class _EditProfileDialogState extends State<EditProfileDialog> {
   @override
   Widget build(BuildContext context) {
     final isLoading = context.watch<ProfileProvider>().isLoading;
+    final scheme = Theme.of(context).colorScheme;
 
     return Container(
       padding: EdgeInsets.only(
-        left: 24,
-        right: 24,
-        top: 24,
-        bottom: MediaQuery.of(context).viewInsets.bottom + 24,
+        left: AppTokens.s24,
+        right: AppTokens.s24,
+        top: AppTokens.s24,
+        bottom: MediaQuery.of(context).viewInsets.bottom + AppTokens.s24,
       ),
-      decoration: const BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.only(
-          topLeft: Radius.circular(28),
-          topRight: Radius.circular(28),
+      decoration: BoxDecoration(
+        color: scheme.surface,
+        borderRadius: const BorderRadius.only(
+          topLeft: Radius.circular(AppTokens.rXl),
+          topRight: Radius.circular(AppTokens.rXl),
         ),
       ),
       child: Form(
@@ -101,23 +104,21 @@ class _EditProfileDialogState extends State<EditProfileDialog> {
                   width: 48,
                   height: 5,
                   decoration: BoxDecoration(
-                    color: Colors.grey.shade300,
+                    color: scheme.outlineVariant,
                     borderRadius: BorderRadius.circular(10),
                   ),
                 ),
               ),
-              const SizedBox(height: 24),
+              const SizedBox(height: AppTokens.s24),
 
-              const Text(
+              Text(
                 'Edit Profile Details',
-                style: TextStyle(
-                  fontSize: 20,
-                  fontWeight: FontWeight.bold,
-                  color: Colors.black87,
+                style: Theme.of(context).textTheme.titleLarge?.copyWith(
+                  color: scheme.onSurface,
                 ),
                 textAlign: TextAlign.center,
               ),
-              const SizedBox(height: 24),
+              const SizedBox(height: AppTokens.s24),
 
               // Name Field
               TextFormField(
@@ -125,23 +126,23 @@ class _EditProfileDialogState extends State<EditProfileDialog> {
                 textCapitalization: TextCapitalization.words,
                 decoration: InputDecoration(
                   labelText: 'Name',
-                  labelStyle: TextStyle(color: Colors.grey.shade600),
-                  prefixIcon: const Icon(Icons.person_outline_rounded, color: Colors.green),
+                  labelStyle: TextStyle(color: scheme.onSurfaceVariant),
+                  prefixIcon: Icon(Icons.person_outline_rounded, color: scheme.primary),
                   focusedBorder: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(16),
-                    borderSide: const BorderSide(color: Colors.green, width: 2),
+                    borderRadius: BorderRadius.circular(AppTokens.rLg),
+                    borderSide: BorderSide(color: scheme.primary, width: 2),
                   ),
                   enabledBorder: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(16),
-                    borderSide: BorderSide(color: Colors.grey.shade300, width: 1.5),
+                    borderRadius: BorderRadius.circular(AppTokens.rLg),
+                    borderSide: BorderSide(color: scheme.outlineVariant, width: 1.5),
                   ),
                   errorBorder: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(16),
-                    borderSide: BorderSide(color: Colors.red.shade400, width: 1.5),
+                    borderRadius: BorderRadius.circular(AppTokens.rLg),
+                    borderSide: BorderSide(color: scheme.error, width: 1.5),
                   ),
                   focusedErrorBorder: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(16),
-                    borderSide: BorderSide(color: Colors.red.shade400, width: 2),
+                    borderRadius: BorderRadius.circular(AppTokens.rLg),
+                    borderSide: BorderSide(color: scheme.error, width: 2),
                   ),
                 ),
                 validator: (value) {
@@ -151,7 +152,7 @@ class _EditProfileDialogState extends State<EditProfileDialog> {
                   return null;
                 },
               ),
-              const SizedBox(height: 20),
+              const SizedBox(height: AppTokens.s20),
 
               // Phone Field
               TextFormField(
@@ -159,24 +160,24 @@ class _EditProfileDialogState extends State<EditProfileDialog> {
                 keyboardType: TextInputType.phone,
                 decoration: InputDecoration(
                   labelText: 'Mobile Number',
-                  labelStyle: TextStyle(color: Colors.grey.shade600),
-                  prefixIcon: const Icon(Icons.phone_android_rounded, color: Colors.green),
+                  labelStyle: TextStyle(color: scheme.onSurfaceVariant),
+                  prefixIcon: Icon(Icons.phone_android_rounded, color: scheme.primary),
                   hintText: 'e.g. 9876543210',
                   focusedBorder: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(16),
-                    borderSide: const BorderSide(color: Colors.green, width: 2),
+                    borderRadius: BorderRadius.circular(AppTokens.rLg),
+                    borderSide: BorderSide(color: scheme.primary, width: 2),
                   ),
                   enabledBorder: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(16),
-                    borderSide: BorderSide(color: Colors.grey.shade300, width: 1.5),
+                    borderRadius: BorderRadius.circular(AppTokens.rLg),
+                    borderSide: BorderSide(color: scheme.outlineVariant, width: 1.5),
                   ),
                   errorBorder: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(16),
-                    borderSide: BorderSide(color: Colors.red.shade400, width: 1.5),
+                    borderRadius: BorderRadius.circular(AppTokens.rLg),
+                    borderSide: BorderSide(color: scheme.error, width: 1.5),
                   ),
                   focusedErrorBorder: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(16),
-                    borderSide: BorderSide(color: Colors.red.shade400, width: 2),
+                    borderRadius: BorderRadius.circular(AppTokens.rLg),
+                    borderSide: BorderSide(color: scheme.error, width: 2),
                   ),
                 ),
                 validator: (value) {
@@ -189,33 +190,56 @@ class _EditProfileDialogState extends State<EditProfileDialog> {
                   return null;
                 },
               ),
-              const SizedBox(height: 20),
+              const SizedBox(height: AppTokens.s20),
 
-              // Village Selection
-              VillageDropdown(
-                value: _selectedVillage,
-                onChanged: (val) {
-                  setState(() {
-                    _selectedVillage = val;
-                  });
+              // Village Field
+              TextFormField(
+                controller: _villageController,
+                textCapitalization: TextCapitalization.words,
+                decoration: InputDecoration(
+                  labelText: 'Village / Town Name',
+                  labelStyle: TextStyle(color: scheme.onSurfaceVariant),
+                  prefixIcon: Icon(Icons.location_city_rounded, color: scheme.primary),
+                  focusedBorder: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(AppTokens.rLg),
+                    borderSide: BorderSide(color: scheme.primary, width: 2),
+                  ),
+                  enabledBorder: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(AppTokens.rLg),
+                    borderSide: BorderSide(color: scheme.outlineVariant, width: 1.5),
+                  ),
+                  errorBorder: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(AppTokens.rLg),
+                    borderSide: BorderSide(color: scheme.error, width: 1.5),
+                  ),
+                  focusedErrorBorder: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(AppTokens.rLg),
+                    borderSide: BorderSide(color: scheme.error, width: 2),
+                  ),
+                ),
+                validator: (value) {
+                  if (value == null || value.trim().isEmpty) {
+                    return 'Please enter your village name';
+                  }
+                  return null;
                 },
               ),
               if (widget.user.role == 'delivery') ...[
-                const SizedBox(height: 20),
+                const SizedBox(height: AppTokens.s20),
                 TextFormField(
                   controller: _vehicleDetailsController,
                   textCapitalization: TextCapitalization.words,
                   decoration: InputDecoration(
                     labelText: 'Vehicle Model & Color',
-                    labelStyle: TextStyle(color: Colors.grey.shade600),
-                    prefixIcon: const Icon(Icons.motorcycle_rounded, color: Colors.green),
+                    labelStyle: TextStyle(color: scheme.onSurfaceVariant),
+                    prefixIcon: Icon(Icons.motorcycle_rounded, color: scheme.primary),
                     focusedBorder: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(16),
-                      borderSide: const BorderSide(color: Colors.green, width: 2),
+                      borderRadius: BorderRadius.circular(AppTokens.rLg),
+                      borderSide: BorderSide(color: scheme.primary, width: 2),
                     ),
                     enabledBorder: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(16),
-                      borderSide: BorderSide(color: Colors.grey.shade300, width: 1.5),
+                      borderRadius: BorderRadius.circular(AppTokens.rLg),
+                      borderSide: BorderSide(color: scheme.outlineVariant, width: 1.5),
                     ),
                   ),
                   validator: (value) {
@@ -225,30 +249,30 @@ class _EditProfileDialogState extends State<EditProfileDialog> {
                     return null;
                   },
                 ),
-                const SizedBox(height: 20),
+                const SizedBox(height: AppTokens.s20),
                 TextFormField(
                   controller: _vehicleNoController,
                   textCapitalization: TextCapitalization.characters,
                   decoration: InputDecoration(
                     labelText: 'Vehicle Plate Number',
                     hintText: 'e.g. AP 39 XX 1234',
-                    labelStyle: TextStyle(color: Colors.grey.shade600),
-                    prefixIcon: const Icon(Icons.pin_outlined, color: Colors.green),
+                    labelStyle: TextStyle(color: scheme.onSurfaceVariant),
+                    prefixIcon: Icon(Icons.pin_outlined, color: scheme.primary),
                     focusedBorder: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(16),
-                      borderSide: const BorderSide(color: Colors.green, width: 2),
+                      borderRadius: BorderRadius.circular(AppTokens.rLg),
+                      borderSide: BorderSide(color: scheme.primary, width: 2),
                     ),
                     enabledBorder: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(16),
-                      borderSide: BorderSide(color: Colors.grey.shade300, width: 1.5),
+                      borderRadius: BorderRadius.circular(AppTokens.rLg),
+                      borderSide: BorderSide(color: scheme.outlineVariant, width: 1.5),
                     ),
                     errorBorder: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(16),
-                      borderSide: BorderSide(color: Colors.red.shade400, width: 1.5),
+                      borderRadius: BorderRadius.circular(AppTokens.rLg),
+                      borderSide: BorderSide(color: scheme.error, width: 1.5),
                     ),
                     focusedErrorBorder: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(16),
-                      borderSide: BorderSide(color: Colors.red.shade400, width: 2),
+                      borderRadius: BorderRadius.circular(AppTokens.rLg),
+                      borderSide: BorderSide(color: scheme.error, width: 2),
                     ),
                   ),
                   validator: (value) {
@@ -262,30 +286,30 @@ class _EditProfileDialogState extends State<EditProfileDialog> {
                     return null;
                   },
                 ),
-                const SizedBox(height: 20),
+                const SizedBox(height: AppTokens.s20),
                 TextFormField(
                   controller: _licenseNoController,
                   textCapitalization: TextCapitalization.characters,
                   decoration: InputDecoration(
                     labelText: 'Driving License Number',
                     hintText: 'e.g. AP-39-2026-1234567',
-                    labelStyle: TextStyle(color: Colors.grey.shade600),
-                    prefixIcon: const Icon(Icons.badge_outlined, color: Colors.green),
+                    labelStyle: TextStyle(color: scheme.onSurfaceVariant),
+                    prefixIcon: Icon(Icons.badge_outlined, color: scheme.primary),
                     focusedBorder: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(16),
-                      borderSide: const BorderSide(color: Colors.green, width: 2),
+                      borderRadius: BorderRadius.circular(AppTokens.rLg),
+                      borderSide: BorderSide(color: scheme.primary, width: 2),
                     ),
                     enabledBorder: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(16),
-                      borderSide: BorderSide(color: Colors.grey.shade300, width: 1.5),
+                      borderRadius: BorderRadius.circular(AppTokens.rLg),
+                      borderSide: BorderSide(color: scheme.outlineVariant, width: 1.5),
                     ),
                     errorBorder: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(16),
-                      borderSide: BorderSide(color: Colors.red.shade400, width: 1.5),
+                      borderRadius: BorderRadius.circular(AppTokens.rLg),
+                      borderSide: BorderSide(color: scheme.error, width: 1.5),
                     ),
                     focusedErrorBorder: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(16),
-                      borderSide: BorderSide(color: Colors.red.shade400, width: 2),
+                      borderRadius: BorderRadius.circular(AppTokens.rLg),
+                      borderSide: BorderSide(color: scheme.error, width: 2),
                     ),
                   ),
                   validator: (value) {
@@ -300,28 +324,27 @@ class _EditProfileDialogState extends State<EditProfileDialog> {
                   },
                 ),
               ],
-              const SizedBox(height: 32),
+              const SizedBox(height: AppTokens.s32),
 
               // Submit Button
               ElevatedButton(
                 onPressed: isLoading ? null : _handleSave,
                 style: ElevatedButton.styleFrom(
-                  backgroundColor: Colors.green,
-                  foregroundColor: Colors.white,
-                  padding: const EdgeInsets.symmetric(vertical: 16),
+                  backgroundColor: scheme.primary,
+                  foregroundColor: scheme.onPrimary,
+                  padding: const EdgeInsets.symmetric(vertical: AppTokens.s16),
                   elevation: 2,
-                  shadowColor: Colors.green.shade100,
                   shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(16),
+                    borderRadius: BorderRadius.circular(AppTokens.rLg),
                   ),
                 ),
                 child: isLoading
-                    ? const SizedBox(
+                    ? SizedBox(
                         height: 20,
                         width: 20,
                         child: CircularProgressIndicator(
                           strokeWidth: 2.5,
-                          valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
+                          valueColor: AlwaysStoppedAnimation<Color>(scheme.onPrimary),
                         ),
                       )
                     : const Text(
@@ -333,13 +356,13 @@ class _EditProfileDialogState extends State<EditProfileDialog> {
                         ),
                       ),
               ),
-              const SizedBox(height: 12),
+              const SizedBox(height: AppTokens.s12),
               
               TextButton(
                 onPressed: isLoading ? null : () => Navigator.of(context).pop(),
                 style: TextButton.styleFrom(
-                  foregroundColor: Colors.grey.shade600,
-                  padding: const EdgeInsets.symmetric(vertical: 12),
+                  foregroundColor: scheme.onSurfaceVariant,
+                  padding: const EdgeInsets.symmetric(vertical: AppTokens.s12),
                 ),
                 child: const Text('Cancel', style: TextStyle(fontWeight: FontWeight.w600)),
               ),

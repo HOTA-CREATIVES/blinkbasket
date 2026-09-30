@@ -38,16 +38,22 @@ abstract class OrderRepository {
   Future<PlaceOrderResult> placeOrder({
     required List<OrderItem> items,
     required String deliveryAddress,
+    String? deliveryInstructions,
     double? latitude,
     double? longitude,
   });
+
+  /// Cancels a customer order while in 'pending' or 'assigned' state.
+  /// Returns null on success, or an error message string on failure.
+  Future<String?> cancelOrder(String orderId, {String? reason});
 
   /// Verifies the customer's delivery OTP via the verifyDeliveryOtp Cloud
   /// Function. Returns null on success, or a user-readable error message.
   Future<String?> verifyDeliveryOtp(String orderId, String otp);
 
-  /// Reads the delivery OTP for one of the customer's own orders
-  /// (rules restrict this to the ordering customer).
+  /// Reads the delivery OTP for one of the customer's own orders.
+  /// Only callable by the ordering customer (Firestore rules enforce this).
+  /// Riders must get the OTP verbally from the customer.
   Future<String?> getOrderOtp(String orderId);
 
   Future<void> updateOrderStatus(String orderId, String status);
@@ -63,6 +69,27 @@ abstract class OrderRepository {
   /// Returns null on success, or a user-readable error message (e.g. if
   /// another rider already accepted it first).
   Future<String?> acceptOrder(String orderId);
+
+  /// Rider reports that an assigned/picked-up/out-for-delivery order could
+  /// not be handed over (customer unreachable, refused COD, bad address).
+  /// The only way to get such an order out of an in-progress state — there
+  /// is no other path back once a rider has accepted it besides delivering
+  /// it. Returns null on success, or a user-readable error message.
+  Future<String?> reportDeliveryFailure(String orderId, String reason);
+
+  /// Admin-only: cancels an order that is still active. Reserved stock is
+  /// released server-side by the order trigger. Returns null on success, or a
+  /// user-readable error message.
+  Future<String?> adminCancelOrder(String orderId, String adminId, String reason);
+
+  /// Admin-only: takes an assigned / picked-up / out-for-delivery order away
+  /// from its rider and returns it to the pending pool, where the broadcast
+  /// re-offers it to riders. For a rider who went dark after accepting.
+  Future<String?> adminUnassignOrder(String orderId);
+
+  /// Admin-only: clears the delivery-OTP attempt counter and lockout for an
+  /// order (resetOtpAttempts Cloud Function).
+  Future<String?> resetOtpAttempts(String orderId);
   Future<void> updateDeliveryBoyActiveStatus(String riderId, bool isActive);
 
   /// Rider's own on/off-duty availability toggle — distinct from [updateDeliveryBoyActiveStatus],

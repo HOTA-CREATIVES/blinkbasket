@@ -1,9 +1,14 @@
+import 'dart:convert';
 import 'package:flutter/material.dart';
-import 'package:geolocator/geolocator.dart';
+import 'package:http/http.dart' as http;
 import 'package:provider/provider.dart';
+import '../../../core/data/villages.dart';
 import '../../../core/models/user_model.dart';
+import '../../../core/design/widgets/leaflet_location_picker.dart';
 import '../../../core/providers/auth_provider.dart';
-import '../../../core/theme/app_colors.dart';
+import '../../../core/providers/config_provider.dart';
+import '../../../core/services/location_service.dart';
+import '../../../core/utils/customer_helper.dart';
 import '../widgets/custom_button.dart';
 import '../widgets/village_dropdown.dart';
 
@@ -23,18 +28,21 @@ class _CustomerProfileSetupScreenState extends State<CustomerProfileSetupScreen>
   final _phoneController = TextEditingController();
 
   // Step 2 Controllers
+  final _villageController = TextEditingController();
   final _streetController = TextEditingController();
   final _pincodeController = TextEditingController();
   final _landmarkController = TextEditingController();
-  String? _selectedVillage;
   double? _latitude;
   double? _longitude;
+  String? _detectedMandal;
+  String? _detectedDistrict;
   bool _isLocating = false;
 
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
       final user = Provider.of<AuthProvider>(context, listen: false).currentUserModel;
       if (user != null) {
         if (user.name.isNotEmpty && _nameController.text.isEmpty) {
@@ -43,8 +51,8 @@ class _CustomerProfileSetupScreenState extends State<CustomerProfileSetupScreen>
         if (user.phone.isNotEmpty && _phoneController.text.isEmpty) {
           _phoneController.text = user.phone;
         }
-        if (user.village.isNotEmpty && _selectedVillage == null) {
-          _selectedVillage = user.village;
+        if (user.village.isNotEmpty && _villageController.text.isEmpty) {
+          _villageController.text = user.village;
         }
       }
     });
@@ -54,6 +62,7 @@ class _CustomerProfileSetupScreenState extends State<CustomerProfileSetupScreen>
   void dispose() {
     _nameController.dispose();
     _phoneController.dispose();
+    _villageController.dispose();
     _streetController.dispose();
     _pincodeController.dispose();
     _landmarkController.dispose();
@@ -61,59 +70,120 @@ class _CustomerProfileSetupScreenState extends State<CustomerProfileSetupScreen>
   }
 
   void _showSnackBar(String message, {bool isError = true}) {
+    final scheme = Theme.of(context).colorScheme;
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
         content: Text(message),
-        backgroundColor: isError ? Colors.red.shade700 : Colors.green.shade700,
+        backgroundColor: isError ? scheme.error : scheme.primary,
         behavior: SnackBarBehavior.floating,
       ),
     );
   }
 
+  Future<void> _reverseGeocode(double lat, double lng) async {
+    try {
+      final url = Uri.parse(
+        'https://nominatim.openstreetmap.org/reverse?format=json&lat=$lat&lon=$lng&zoom=18&addressdetails=1',
+      );
+      final response = await http.get(url, headers: {'User-Agent': 'JCMartFlutterApp/1.0'});
+      if (response.statusCode == 200) {
+        final data = jsonDecode(response.body) as Map<String, dynamic>;
+        final address = data['address'] as Map<String, dynamic>?;
+        if (address != null) {
+          // The village is NOT taken from Nominatim's free text any more —
+          // it's derived from the admin service zones (see _acceptLocation),
+          // so it always matches a real zone name.
+          final road = (address['road'] ?? address['suburb'] ?? address['neighbourhood'] ?? '').toString();
+          final mandalName = (address['county'] ?? address['suburb'] ?? address['neighbourhood'] ?? '').toString();
+          final districtName = (address['state_district'] ?? address['county'] ?? address['state'] ?? '').toString();
+          final postcode = address['postcode'] as String?;
+
+          if (mounted) {
+            setState(() {
+              if (road.isNotEmpty && _streetController.text.trim().isEmpty) {
+                _streetController.text = road;
+              }
+              if (mandalName.isNotEmpty) {
+                _detectedMandal = mandalName;
+              }
+              if (districtName.isNotEmpty) {
+                _detectedDistrict = districtName;
+              }
+              if (postcode != null && postcode.isNotEmpty) {
+                _pincodeController.text = postcode;
+              }
+            });
+          }
+        }
+      }
+    } catch (e) {
+      debugPrint('Reverse geocode error: $e');
+    }
+  }
+
+  /// Checks a captured/pinned point against the admin service zones. Inside →
+  /// stores it and autofills the village (the matching zone) and address
+  /// details; outside → tells the user and stores nothing.
+  Future<bool> _acceptLocation(double lat, double lng) async {
+    final zones = Provider.of<ConfigProvider>(context, listen: false).latestServiceZones;
+    final match = CustomerHelper.nearestZone(lat, lng, zones);
+    if (!match.isInside) {
+      if (mounted) _showSnackBar("Sorry, we don't deliver to this location yet.");
+      return false;
+    }
+    if (!mounted) return false;
+    setState(() {
+      _latitude = lat;
+      _longitude = lng;
+      _villageController.text = match.name;
+    });
+    await _reverseGeocode(lat, lng);
+    return true;
+  }
+
+  /// Fallback when GPS is denied/unavailable: drop a pin on the map instead.
+  void _pinOnMap() {
+    final zones = Provider.of<ConfigProvider>(context, listen: false).latestServiceZones;
+    final center = _latitude != null && _longitude != null
+        ? (lat: _latitude!, lng: _longitude!)
+        : CustomerHelper.centerOf(_villageController.text.trim(), zones);
+    LeafletLocationPicker.show(
+      context: context,
+      initialLat: center.lat,
+      initialLng: center.lng,
+      initialIsPinned: _latitude != null,
+      onConfirmed: (lat, lng) => _acceptLocation(lat, lng),
+    );
+  }
+
   Future<void> _getCurrentLocation() async {
     setState(() => _isLocating = true);
-    try {
-      bool serviceEnabled = await Geolocator.isLocationServiceEnabled();
-      if (!serviceEnabled) {
-        _showSnackBar('Location services are disabled. Please turn on GPS.');
-        setState(() => _isLocating = false);
-        return;
-      }
-
-      LocationPermission permission = await Geolocator.checkPermission();
-      if (permission == LocationPermission.denied) {
-        permission = await Geolocator.requestPermission();
-        if (permission == LocationPermission.denied) {
-          _showSnackBar('Location permission denied.');
-          setState(() => _isLocating = false);
-          return;
-        }
-      }
-
-      if (permission == LocationPermission.deniedForever) {
-        _showSnackBar('Location permission permanently denied. Enable in Settings.');
-        setState(() => _isLocating = false);
-        return;
-      }
-
-      final position = await Geolocator.getCurrentPosition(
-        locationSettings: const LocationSettings(accuracy: LocationAccuracy.high),
-      );
-
-      setState(() {
-        _latitude = position.latitude;
-        _longitude = position.longitude;
-        if (_pincodeController.text.isEmpty) {
-          _pincodeController.text = '534198'; // Default area pincode
-        }
-        _isLocating = false;
-      });
-
-      _showSnackBar('Coordinates fetched successfully!', isError: false);
-    } catch (e) {
+    final result = await LocationService.currentFix();
+    final fix = result.fix;
+    if (fix == null) {
+      if (!mounted) return;
       setState(() => _isLocating = false);
-      _showSnackBar('Failed to fetch location: $e');
+      // Explain what went wrong and, when only a system setting can fix it,
+      // offer the shortcut there. The map pin button stays as the fallback.
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(result.message),
+          backgroundColor: Theme.of(context).colorScheme.error,
+          behavior: SnackBarBehavior.floating,
+          action: result.canOpenSettings
+              ? SnackBarAction(label: 'Settings', onPressed: result.openSettings)
+              : null,
+        ),
+      );
+      return;
     }
+
+    final accepted = await _acceptLocation(fix.latitude, fix.longitude);
+
+    if (!mounted) return;
+    setState(() => _isLocating = false);
+
+    if (accepted) _showSnackBar('Location & village auto-filled!', isError: false);
   }
 
   void _goToStep2() {
@@ -122,21 +192,41 @@ class _CustomerProfileSetupScreenState extends State<CustomerProfileSetupScreen>
   }
 
   Future<void> _submitProfileAndGoToStep3() async {
-    if (_selectedVillage == null || _selectedVillage!.isEmpty) {
-      _showSnackBar('Please select your village');
+    if (_streetController.text.trim().isEmpty) {
+      _showSnackBar('Please enter your street address / house number');
       return;
     }
+    final lat = _latitude;
+    final lng = _longitude;
+    if (lat == null || lng == null) {
+      _showSnackBar('Please use your GPS location or pin it on the map so the rider can find you');
+      return;
+    }
+    // The village of record comes from where the customer actually is (the
+    // admin service zones), not from whatever text was typed or geocoded.
+    final zones = Provider.of<ConfigProvider>(context, listen: false).latestServiceZones;
+    final match = CustomerHelper.nearestZone(lat, lng, zones);
+    if (!match.isInside) {
+      _showSnackBar("Sorry, we don't deliver to this location yet.");
+      return;
+    }
+    final village = match.name;
 
     final authProvider = Provider.of<AuthProvider>(context, listen: false);
+    final villageMeta = Villages.byName(village);
+    final mandal = _detectedMandal ?? villageMeta?.mandal ?? '';
+    final district = _detectedDistrict ?? villageMeta?.district ?? '';
+    final zoneId = villageMeta?.deliveryZoneId ?? Villages.defaultZoneId;
+    final fallbackPin = villageMeta?.defaultPincode ?? '';
 
     final defaultAddress = AddressModel(
       id: 'addr_default_${DateTime.now().millisecondsSinceEpoch}',
       name: _nameController.text.trim(),
-      addressLine1: _streetController.text.trim().isEmpty ? 'Main Road' : _streetController.text.trim(),
-      pinCode: _pincodeController.text.trim().isEmpty ? '534198' : _pincodeController.text.trim(),
-      village: _selectedVillage!,
-      mandal: 'Undi',
-      district: 'West Godavari',
+      addressLine1: _streetController.text.trim(),
+      pinCode: _pincodeController.text.trim().isEmpty ? fallbackPin : _pincodeController.text.trim(),
+      village: village,
+      mandal: mandal,
+      district: district,
       landmark: _landmarkController.text.trim().isEmpty ? null : _landmarkController.text.trim(),
       latitude: _latitude,
       longitude: _longitude,
@@ -146,9 +236,10 @@ class _CustomerProfileSetupScreenState extends State<CustomerProfileSetupScreen>
     final success = await authProvider.setupCustomerProfile(
       name: _nameController.text.trim(),
       phone: _phoneController.text.trim(),
-      village: _selectedVillage!,
-      mandal: 'Undi',
-      district: 'West Godavari',
+      village: village,
+      mandal: mandal,
+      district: district,
+      deliveryZoneId: zoneId,
       defaultAddress: defaultAddress,
     );
 
@@ -161,13 +252,14 @@ class _CustomerProfileSetupScreenState extends State<CustomerProfileSetupScreen>
 
   @override
   Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
     return Scaffold(
       appBar: AppBar(
         title: Text('Customer Onboarding (Step $_currentStep of 3)'),
         automaticallyImplyLeading: false,
         actions: [
           IconButton(
-            icon: const Icon(Icons.logout, color: Colors.red),
+            icon: Icon(Icons.logout, color: scheme.error),
             tooltip: 'Sign Out',
             onPressed: () async {
               await Provider.of<AuthProvider>(context, listen: false).logout();
@@ -181,8 +273,8 @@ class _CustomerProfileSetupScreenState extends State<CustomerProfileSetupScreen>
             // Linear Progress Indicator
             LinearProgressIndicator(
               value: _currentStep / 3,
-              backgroundColor: Colors.grey.shade200,
-              color: AppColors.primary,
+              backgroundColor: scheme.surfaceContainerHighest,
+              color: scheme.primary,
               minHeight: 6,
             ),
             Expanded(
@@ -211,26 +303,27 @@ class _CustomerProfileSetupScreenState extends State<CustomerProfileSetupScreen>
 
   // STEP 1: Personal Info (Name & Phone)
   Widget _buildStep1Form() {
+    final scheme = Theme.of(context).colorScheme;
     return Form(
       key: _step1FormKey,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          const Icon(
+          Icon(
             Icons.person_pin_rounded,
             size: 80,
-            color: AppColors.primary,
+            color: scheme.primary,
           ),
           const SizedBox(height: 16),
-          const Text(
+          Text(
             'Step 1: Personal Details',
-            style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold),
+            style: Theme.of(context).textTheme.headlineSmall,
             textAlign: TextAlign.center,
           ),
           const SizedBox(height: 8),
-          const Text(
+          Text(
             'Please provide your full name and contact number for seamless delivery updates.',
-            style: TextStyle(fontSize: 14, color: Colors.grey),
+            style: Theme.of(context).textTheme.bodyMedium?.copyWith(color: scheme.onSurfaceVariant),
             textAlign: TextAlign.center,
           ),
           const SizedBox(height: 32),
@@ -268,7 +361,7 @@ class _CustomerProfileSetupScreenState extends State<CustomerProfileSetupScreen>
 
           CustomButton(
             text: 'Next: Location Setup',
-            backgroundColor: AppColors.primary,
+            backgroundColor: scheme.primary,
             onPressed: _goToStep2,
           ),
         ],
@@ -278,51 +371,77 @@ class _CustomerProfileSetupScreenState extends State<CustomerProfileSetupScreen>
 
   // STEP 2: Location Coordinates & Address Edit
   Widget _buildStep2Form() {
+    final scheme = Theme.of(context).colorScheme;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        const Icon(
+        Icon(
           Icons.location_on_rounded,
           size: 80,
-          color: AppColors.primary,
+          color: scheme.primary,
         ),
         const SizedBox(height: 16),
-        const Text(
-          'Step 2: Delivery Location',
-          style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold),
-          textAlign: TextAlign.center,
-        ),
-        const SizedBox(height: 8),
-        const Text(
-          'Autofill coordinates or edit your address to ensure accurate quick-commerce delivery.',
-          style: TextStyle(fontSize: 14, color: Colors.grey),
-          textAlign: TextAlign.center,
-        ),
+          Text(
+            'Step 2: Delivery Location',
+            style: Theme.of(context).textTheme.headlineSmall,
+            textAlign: TextAlign.center,
+          ),
+          const SizedBox(height: 8),
+          Text(
+            'Autofill coordinates or edit your address to ensure accurate quick-commerce delivery.',
+            style: Theme.of(context).textTheme.bodyMedium?.copyWith(color: scheme.onSurfaceVariant),
+            textAlign: TextAlign.center,
+          ),
         const SizedBox(height: 24),
 
         // Fetch GPS Button
         OutlinedButton.icon(
           style: OutlinedButton.styleFrom(
             padding: const EdgeInsets.symmetric(vertical: 14),
-            side: const BorderSide(color: AppColors.primary, width: 1.5),
+            side: BorderSide(color: scheme.primary, width: 1.5),
             shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
           ),
           icon: _isLocating
               ? const SizedBox(height: 20, width: 20, child: CircularProgressIndicator(strokeWidth: 2))
-              : const Icon(Icons.my_location, color: AppColors.primary),
+              : Icon(Icons.my_location, color: scheme.primary),
           label: Text(
             _isLocating
                 ? 'Fetching Location...'
                 : (_latitude != null ? 'Location Captured (${_latitude!.toStringAsFixed(4)}, ${_longitude!.toStringAsFixed(4)})' : 'Use Current GPS Location'),
-            style: const TextStyle(color: AppColors.primary, fontWeight: FontWeight.bold),
+            style: TextStyle(color: scheme.primary, fontWeight: FontWeight.bold),
           ),
           onPressed: _isLocating ? null : _getCurrentLocation,
         ),
-        const SizedBox(height: 20),
+        TextButton.icon(
+          onPressed: _pinOnMap,
+          icon: const Icon(Icons.pin_drop_outlined),
+          label: Text(_latitude != null ? 'Adjust pin on map' : 'GPS not working? Pin on the map'),
+        ),
+        const SizedBox(height: 12),
 
+        // Village is one of the admin-configured delivery zones — never free
+        // text — so it always matches rider routing and the service area.
         VillageDropdown(
-          value: _selectedVillage,
-          onChanged: (val) => setState(() => _selectedVillage = val),
+          value: _villageController.text.isEmpty ? null : _villageController.text,
+          zoneNames: Provider.of<ConfigProvider>(context, listen: false)
+              .latestServiceZones
+              .map((z) => z.name)
+              .toList(),
+          onChanged: (v) {
+            setState(() {
+              _villageController.text = v ?? '';
+              // A pin captured in a different village is stale now.
+              final lat = _latitude;
+              final lng = _longitude;
+              if (v != null && lat != null && lng != null) {
+                final zones = Provider.of<ConfigProvider>(context, listen: false).latestServiceZones;
+                if (CustomerHelper.nearestZone(lat, lng, zones).name != v) {
+                  _latitude = null;
+                  _longitude = null;
+                }
+              }
+            });
+          },
         ),
         const SizedBox(height: 16),
 
@@ -351,13 +470,26 @@ class _CustomerProfileSetupScreenState extends State<CustomerProfileSetupScreen>
             ),
             const SizedBox(width: 12),
             Expanded(
-              child: TextFormField(
-                initialValue: 'Undi / W.Godavari',
-                enabled: false,
+              child: InputDecorator(
                 decoration: InputDecoration(
-                  labelText: 'Mandal/District',
+                  labelText: 'Mandal / District',
                   prefixIcon: const Icon(Icons.map_outlined),
                   border: OutlineInputBorder(borderRadius: BorderRadius.circular(16)),
+                  enabledBorder: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(16),
+                    borderSide: BorderSide(color: scheme.outlineVariant, width: 1.0),
+                  ),
+                ),
+                child: Text(
+                  () {
+                    final vText = _villageController.text.trim();
+                    final meta = Villages.byName(vText);
+                    final m = _detectedMandal ?? meta?.mandal ?? (vText.isNotEmpty ? '—' : '');
+                    final d = _detectedDistrict ?? meta?.district ?? '';
+                    if (m.isEmpty && d.isEmpty) return '— / —';
+                    return '${m.isNotEmpty ? m : '—'} / ${d.isNotEmpty ? d : '—'}';
+                  }(),
+                  style: Theme.of(context).textTheme.bodyMedium?.copyWith(fontWeight: FontWeight.w600),
                 ),
               ),
             ),
@@ -392,7 +524,7 @@ class _CustomerProfileSetupScreenState extends State<CustomerProfileSetupScreen>
               flex: 2,
               child: CustomButton(
                 text: 'Save & Continue',
-                backgroundColor: AppColors.primary,
+                backgroundColor: scheme.primary,
                 isLoading: Provider.of<AuthProvider>(context).isLoading,
                 onPressed: _submitProfileAndGoToStep3,
               ),
@@ -405,6 +537,7 @@ class _CustomerProfileSetupScreenState extends State<CustomerProfileSetupScreen>
 
   // STEP 3: Keep Shopping Screen & Redirection
   Widget _buildStep3KeepShopping() {
+    final scheme = Theme.of(context).colorScheme;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
@@ -412,26 +545,26 @@ class _CustomerProfileSetupScreenState extends State<CustomerProfileSetupScreen>
         Container(
           height: 140,
           width: 140,
-          decoration: const BoxDecoration(
-            color: AppColors.greenPastel,
+          decoration: BoxDecoration(
+            color: scheme.primaryContainer,
             shape: BoxShape.circle,
           ),
-          child: const Icon(
+          child: Icon(
             Icons.check_circle_rounded,
             size: 90,
-            color: AppColors.primary,
+            color: scheme.primary,
           ),
         ),
         const SizedBox(height: 32),
-        const Text(
+        Text(
           'Onboarding Complete!',
-          style: TextStyle(fontSize: 26, fontWeight: FontWeight.bold, color: AppColors.primary),
+          style: TextStyle(fontSize: 26, fontWeight: FontWeight.bold, color: scheme.primary),
           textAlign: TextAlign.center,
         ),
         const SizedBox(height: 16),
         Text(
           'Welcome to J C Mart, ${_nameController.text.trim()}!\nYour location and customer profile have been saved successfully.',
-          style: const TextStyle(fontSize: 16, color: Colors.grey, height: 1.4),
+          style: TextStyle(fontSize: 16, color: scheme.onSurfaceVariant, height: 1.4),
           textAlign: TextAlign.center,
         ),
         const SizedBox(height: 36),
@@ -439,23 +572,23 @@ class _CustomerProfileSetupScreenState extends State<CustomerProfileSetupScreen>
         Container(
           padding: const EdgeInsets.all(20),
           decoration: BoxDecoration(
-            color: Colors.green.shade50,
+            color: scheme.primaryContainer,
             borderRadius: BorderRadius.circular(20),
-            border: Border.all(color: Colors.green.shade200),
+            border: Border.all(color: scheme.primaryContainer),
           ),
           child: Column(
             children: [
-              const Row(
+              Row(
                 children: [
-                  Icon(Icons.bolt, color: Colors.green),
-                  SizedBox(width: 8),
-                  Text('Quick-Commerce Express', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
+                  Icon(Icons.bolt, color: scheme.primary),
+                  const SizedBox(width: 8),
+                  Text('Quick-Commerce Express', style: Theme.of(context).textTheme.titleMedium),
                 ],
               ),
               const SizedBox(height: 8),
               Text(
-                'Fresh groceries ready for 10-minute delivery to ${_selectedVillage ?? "your village"}.',
-                style: const TextStyle(color: Colors.black87),
+                'Fresh groceries delivered fast to ${_villageController.text.trim().isNotEmpty ? _villageController.text.trim() : "your village"}.',
+                style: TextStyle(color: scheme.onSurface),
               ),
             ],
           ),
@@ -464,7 +597,7 @@ class _CustomerProfileSetupScreenState extends State<CustomerProfileSetupScreen>
 
         CustomButton(
           text: 'Keep Shopping (Go to Home)',
-          backgroundColor: AppColors.primary,
+          backgroundColor: scheme.primary,
           onPressed: () {
             Navigator.of(context).popUntil((route) => route.isFirst);
           },

@@ -10,12 +10,19 @@ class AppTheme {
   static ThemeData get dark => _build(Brightness.dark);
 
   static ThemeData _build(Brightness brightness) {
+    final isLight = brightness == Brightness.light;
+    // Same brand hue/saturation in both modes, just lifted lighter for dark
+    // mode so it keeps enough contrast against dark surfaces — pinning it
+    // explicitly (rather than letting the seed derive it) keeps "J C Mart
+    // green" recognizable everywhere instead of drifting per-brightness.
+    final primary = isLight
+        ? AppTokens.primary
+        : HSLColor.fromColor(AppTokens.primary).withLightness(0.62).toColor();
     final scheme = ColorScheme.fromSeed(
       seedColor: AppTokens.primary,
-      primary: brightness == Brightness.light ? AppTokens.primary : null,
+      primary: primary,
       brightness: brightness,
     );
-    final isLight = brightness == Brightness.light;
 
     final base = ThemeData(
       useMaterial3: true,
@@ -24,7 +31,30 @@ class AppTheme {
     );
 
     return base.copyWith(
-      textTheme: GoogleFonts.poppinsTextTheme(base.textTheme),
+      // A small, named type scale so screens pull `textTheme.titleMedium`
+      // etc. instead of scattering inline `TextStyle(fontSize: n)` literals.
+      textTheme: GoogleFonts.poppinsTextTheme(base.textTheme).copyWith(
+        headlineSmall: GoogleFonts.poppins(
+            fontSize: 24, fontWeight: FontWeight.w800, color: scheme.onSurface), // hero price / big numbers
+        titleLarge: GoogleFonts.poppins(
+            fontSize: 20, fontWeight: FontWeight.w700, color: scheme.onSurface), // screen/section titles
+        titleMedium: GoogleFonts.poppins(
+            fontSize: 16, fontWeight: FontWeight.w700, color: scheme.onSurface), // card titles
+        titleSmall: GoogleFonts.poppins(
+            fontSize: 15, fontWeight: FontWeight.w700, color: scheme.onSurface), // sub-titles / list headers
+        bodyLarge: GoogleFonts.poppins(
+            fontSize: 15, fontWeight: FontWeight.w500, color: scheme.onSurface),
+        bodyMedium: GoogleFonts.poppins(
+            fontSize: 14, fontWeight: FontWeight.w400, color: scheme.onSurface),
+        bodySmall: GoogleFonts.poppins(
+            fontSize: 13, fontWeight: FontWeight.w400, color: scheme.onSurfaceVariant),
+        labelLarge: GoogleFonts.poppins(
+            fontSize: 14, fontWeight: FontWeight.w700, color: scheme.onSurface), // button-adjacent labels
+        labelMedium: GoogleFonts.poppins(
+            fontSize: 12, fontWeight: FontWeight.w600, color: scheme.onSurfaceVariant), // units/captions
+        labelSmall: GoogleFonts.poppins(
+            fontSize: 11, fontWeight: FontWeight.w700, color: scheme.onSurfaceVariant), // badges/pills
+      ),
       appBarTheme: AppBarTheme(
         elevation: 0,
         scrolledUnderElevation: 0.5,
@@ -130,6 +160,25 @@ class AppTheme {
       ),
       dividerTheme: DividerThemeData(
         color: scheme.outlineVariant.withValues(alpha: 0.5),
+      ),
+      bottomNavigationBarTheme: BottomNavigationBarThemeData(
+        backgroundColor: scheme.surface,
+        selectedItemColor: scheme.primary,
+        unselectedItemColor: scheme.onSurfaceVariant,
+        type: BottomNavigationBarType.fixed,
+        elevation: 0,
+      ),
+      tabBarTheme: TabBarThemeData(
+        labelColor: scheme.primary,
+        unselectedLabelColor: scheme.onSurfaceVariant,
+        indicatorColor: scheme.primary,
+        labelStyle: GoogleFonts.poppins(fontWeight: FontWeight.w700, fontSize: 14),
+        unselectedLabelStyle: GoogleFonts.poppins(fontWeight: FontWeight.w600, fontSize: 14),
+      ),
+      floatingActionButtonTheme: FloatingActionButtonThemeData(
+        backgroundColor: scheme.primary,
+        foregroundColor: scheme.onPrimary,
+        elevation: 2,
       ),
     );
   }

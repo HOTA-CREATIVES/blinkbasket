@@ -1,7 +1,79 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_map/flutter_map.dart';
-import 'package:latlong2/latlong.dart';
+import 'package:latlong2/latlong.dart' hide Path;
 import '../app_tokens.dart';
+
+/// Free, no-API-key CartoDB Voyager tiles — a more polished/legible look
+/// than plain OpenStreetMap raster tiles at zero cost. CartoDB's free tier
+/// asks for attribution, added below each map via [_MapAttribution].
+const _kTileUrlTemplate = 'https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png';
+const _kTileSubdomains = ['a', 'b', 'c', 'd'];
+
+/// Sent to the tile server so it can identify (and contact) this app. Must be
+/// the real application id — it was the `com.example` placeholder.
+const _kUserAgentPackage = 'com.jcmart.app';
+
+class _MapAttribution extends StatelessWidget {
+  const _MapAttribution();
+
+  @override
+  Widget build(BuildContext context) {
+    return const RichAttributionWidget(
+      alignment: AttributionAlignment.bottomRight,
+      attributions: [
+        TextSourceAttribution('© OpenStreetMap contributors © CARTO'),
+      ],
+    );
+  }
+}
+
+/// Small brand-colored teardrop map marker, replacing the generic Material
+/// `Icons.location_pin` so pins read as "J C Mart" rather than a stock icon.
+class _TeardropPin extends StatelessWidget {
+  final Color color;
+  final double size;
+
+  const _TeardropPin({required this.color, this.size = 44});
+
+  @override
+  Widget build(BuildContext context) {
+    return CustomPaint(
+      size: Size(size, size * 1.3),
+      painter: _TeardropPainter(color: color),
+    );
+  }
+}
+
+class _TeardropPainter extends CustomPainter {
+  final Color color;
+  const _TeardropPainter({required this.color});
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final w = size.width;
+    final radius = w / 2;
+    final center = Offset(w / 2, radius);
+
+    final path = Path()
+      ..moveTo(w / 2, size.height)
+      ..quadraticBezierTo(0, radius * 1.4, 0, radius)
+      ..arcToPoint(Offset(w, radius), radius: Radius.circular(radius), clockwise: true)
+      ..quadraticBezierTo(w, radius * 1.4, w / 2, size.height)
+      ..close();
+
+    canvas.drawPath(
+      path.shift(const Offset(0, 2)),
+      Paint()
+        ..color = Colors.black.withValues(alpha: 0.2)
+        ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 3),
+    );
+    canvas.drawPath(path, Paint()..color = color);
+    canvas.drawCircle(center, radius * 0.35, Paint()..color = Colors.white);
+  }
+
+  @override
+  bool shouldRepaint(covariant _TeardropPainter oldDelegate) => oldDelegate.color != color;
+}
 
 /// A reusable Leaflet-based map picker shown as a modal bottom sheet.
 ///
@@ -21,12 +93,19 @@ import '../app_tokens.dart';
 class LeafletLocationPicker extends StatefulWidget {
   final double initialLat;
   final double initialLng;
+
+  /// True when [initialLat]/[initialLng] is a location the customer already
+  /// pinned/saved. When false they're just a map-centering default (e.g. the
+  /// village centre), so Confirm stays disabled until the map is moved —
+  /// otherwise a bare "Confirm" would submit the default as a real pin.
+  final bool initialIsPinned;
   final void Function(double lat, double lng) onConfirmed;
 
   const LeafletLocationPicker({
     super.key,
     required this.initialLat,
     required this.initialLng,
+    this.initialIsPinned = false,
     required this.onConfirmed,
   });
 
@@ -35,6 +114,7 @@ class LeafletLocationPicker extends StatefulWidget {
     required BuildContext context,
     required double initialLat,
     required double initialLng,
+    bool initialIsPinned = false,
     required void Function(double lat, double lng) onConfirmed,
   }) {
     showModalBottomSheet(
@@ -47,6 +127,7 @@ class LeafletLocationPicker extends StatefulWidget {
       builder: (_) => LeafletLocationPicker(
         initialLat: initialLat,
         initialLng: initialLng,
+        initialIsPinned: initialIsPinned,
         onConfirmed: onConfirmed,
       ),
     );
@@ -57,14 +138,22 @@ class LeafletLocationPicker extends StatefulWidget {
 }
 
 class _LeafletLocationPickerState extends State<LeafletLocationPicker> {
+  final MapController _mapController = MapController();
   late double _selectedLat;
   late double _selectedLng;
+  late bool _hasMoved = widget.initialIsPinned;
 
   @override
   void initState() {
     super.initState();
     _selectedLat = widget.initialLat;
     _selectedLng = widget.initialLng;
+  }
+
+  @override
+  void dispose() {
+    _mapController.dispose();
+    super.dispose();
   }
 
   @override
@@ -98,9 +187,11 @@ class _LeafletLocationPickerState extends State<LeafletLocationPicker> {
             ),
             const SizedBox(height: AppTokens.s4),
             Text(
-              'Drag the map to center the red marker on your exact location.',
-              style: TextStyle(
-                  color: scheme.onSurfaceVariant, fontSize: 12),
+              'Drag the map to center the marker on your exact location.',
+              style: Theme.of(context)
+                  .textTheme
+                  .labelMedium
+                  ?.copyWith(color: scheme.onSurfaceVariant),
               textAlign: TextAlign.center,
             ),
             const SizedBox(height: AppTokens.s12),
@@ -111,31 +202,34 @@ class _LeafletLocationPickerState extends State<LeafletLocationPicker> {
                 child: Stack(
                   children: [
                     FlutterMap(
+                      mapController: _mapController,
                       options: MapOptions(
                         initialCenter:
                             LatLng(widget.initialLat, widget.initialLng),
                         initialZoom: 16.0,
+                        // Track every camera change, not just gesture-driven
+                        // ones — fling/inertia frames report hasGesture=false
+                        // and would otherwise leave a stale selection.
                         onPositionChanged: (position, hasGesture) {
-                          if (hasGesture) {
-                            setState(() {
-                              _selectedLat = position.center.latitude;
-                              _selectedLng = position.center.longitude;
-                            });
-                          }
+                          setState(() {
+                            _selectedLat = position.center.latitude;
+                            _selectedLng = position.center.longitude;
+                            if (hasGesture) _hasMoved = true;
+                          });
                         },
                       ),
                       children: [
                         TileLayer(
-                          urlTemplate:
-                              'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
-                          userAgentPackageName: 'com.example.hypermart',
+                          urlTemplate: _kTileUrlTemplate,
+                          subdomains: _kTileSubdomains,
+                          userAgentPackageName: _kUserAgentPackage,
                         ),
+                        const _MapAttribution(),
                       ],
                     ),
                     // Fixed center pin
-                    const Center(
-                      child: Icon(Icons.location_pin,
-                          color: AppTokens.statusCancelled, size: 44),
+                    Center(
+                      child: _TeardropPin(color: scheme.primary),
                     ),
                     // Crosshair shadow for better visibility
                     Center(
@@ -169,8 +263,10 @@ class _LeafletLocationPickerState extends State<LeafletLocationPicker> {
                   const SizedBox(width: AppTokens.s8),
                   Text(
                     '${_selectedLat.toStringAsFixed(6)}, ${_selectedLng.toStringAsFixed(6)}',
-                    style: const TextStyle(
-                        fontWeight: FontWeight.w800, fontSize: 13),
+                    style: Theme.of(context)
+                        .textTheme
+                        .bodySmall
+                        ?.copyWith(fontWeight: FontWeight.w800, color: scheme.onSurface),
                   ),
                 ],
               ),
@@ -180,13 +276,19 @@ class _LeafletLocationPickerState extends State<LeafletLocationPicker> {
             SizedBox(
               width: double.infinity,
               child: ElevatedButton.icon(
-                onPressed: () {
-                  widget.onConfirmed(_selectedLat, _selectedLng);
-                  Navigator.pop(context);
-                },
+                onPressed: !_hasMoved
+                    ? null
+                    : () {
+                        // Read the camera itself so the result is the pin's
+                        // true position even if a fling is still settling.
+                        final center = _mapController.camera.center;
+                        widget.onConfirmed(center.latitude, center.longitude);
+                        Navigator.pop(context);
+                      },
                 icon: const Icon(Icons.check_rounded, size: 18),
-                label: const Text('Confirm Pinned Location',
-                    style: TextStyle(fontWeight: FontWeight.w700)),
+                label: Text(_hasMoved
+                    ? 'Confirm Pinned Location'
+                    : 'Move the map to your exact spot'),
                 style: ElevatedButton.styleFrom(
                   padding:
                       const EdgeInsets.symmetric(vertical: AppTokens.s16),
@@ -218,6 +320,7 @@ class LeafletLocationPreview extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
     return ClipRRect(
       borderRadius: BorderRadius.circular(AppTokens.rMd),
       child: SizedBox(
@@ -233,21 +336,19 @@ class LeafletLocationPreview extends StatelessWidget {
             ),
             children: [
               TileLayer(
-                urlTemplate:
-                    'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
-                userAgentPackageName: 'com.example.hypermart',
+                urlTemplate: _kTileUrlTemplate,
+                subdomains: _kTileSubdomains,
+                userAgentPackageName: _kUserAgentPackage,
               ),
+              const _MapAttribution(),
               MarkerLayer(
                 markers: [
                   Marker(
                     point: LatLng(latitude, longitude),
-                    width: 40,
-                    height: 40,
-                    child: const Icon(
-                      Icons.location_pin,
-                      color: AppTokens.statusCancelled,
-                      size: 40,
-                    ),
+                    width: 36,
+                    height: 47,
+                    alignment: Alignment.bottomCenter,
+                    child: _TeardropPin(color: scheme.primary, size: 36),
                   ),
                 ],
               ),

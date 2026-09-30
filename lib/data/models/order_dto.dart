@@ -44,10 +44,13 @@ class OrderDto extends Order {
     required super.customerName,
     required super.customerPhone,
     required super.deliveryAddress,
+    super.deliveryInstructions,
     required super.village,
     super.latitude,
     super.longitude,
     required super.items,
+    super.subtotal,
+    super.deliveryFee,
     required super.totalAmount,
     required super.paymentMethod,
     required super.status,
@@ -59,6 +62,9 @@ class OrderDto extends Order {
     super.rating,
     super.ratingComment,
     super.notifyTier,
+    super.cancelReason,
+    super.cancelledBy,
+    super.riderPayout,
   });
 
   factory OrderDto.fromMap(Map<String, dynamic> map, String documentId) {
@@ -68,6 +74,7 @@ class OrderDto extends Order {
       customerName: map['customerName'] ?? '',
       customerPhone: map['customerPhone'] ?? '',
       deliveryAddress: map['deliveryAddress'] ?? '',
+      deliveryInstructions: map['deliveryInstructions'] as String?,
       village: map['village'] ?? '',
       latitude: (map['latitude'] as num?)?.toDouble(),
       longitude: (map['longitude'] as num?)?.toDouble(),
@@ -75,6 +82,8 @@ class OrderDto extends Order {
               ?.map((item) => OrderItemDto.fromMap(item as Map<String, dynamic>))
               .toList() ??
           [],
+      subtotal: (map['subtotal'] ?? 0.0).toDouble(),
+      deliveryFee: (map['deliveryFee'] ?? 0.0).toDouble(),
       totalAmount: (map['totalAmount'] ?? 0.0).toDouble(),
       paymentMethod: map['paymentMethod'] ?? 'COD',
       status: map['status'] ?? 'pending',
@@ -86,6 +95,9 @@ class OrderDto extends Order {
       rating: map['rating'] as int?,
       ratingComment: map['ratingComment'] as String?,
       notifyTier: (map['notifyTier'] as num?)?.toInt(),
+      cancelReason: map['cancelReason'] as String?,
+      cancelledBy: map['cancelledBy'] as String?,
+      riderPayout: (map['riderPayout'] as num?)?.toDouble(),
     );
   }
 }

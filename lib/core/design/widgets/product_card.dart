@@ -1,5 +1,6 @@
   import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
 import '../../../domain/entities/product.dart';
 import '../app_tokens.dart';
@@ -24,133 +25,172 @@ class ProductCard extends StatelessWidget {
     this.onTap,
   });
 
-  bool get _outOfStock => product.stock <= 0;
-  bool get _lowStock => !_outOfStock && product.stock <= 5;
+  bool get _outOfStock => product.availableStock <= 0 || !product.isAvailable;
+  bool get _lowStock => !_outOfStock && product.availableStock <= 5;
+
+  /// Whole-number discount percentage vs. [Product.discountedPrice], or
+  /// null when there's no active discount.
+  int? get _discountPercent {
+    final discounted = product.discountedPrice;
+    if (discounted == null || discounted >= product.price || product.price <= 0) return null;
+    return (((product.price - discounted) / product.price) * 100).round();
+  }
 
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
+    final textTheme = Theme.of(context).textTheme;
+    final discountPercent = _discountPercent;
 
-    return Card(
-      clipBehavior: Clip.antiAlias,
-      child: InkWell(
-        onTap: onTap,
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Expanded(
-              child: Stack(
-                fit: StackFit.expand,
-                children: [
-                  ProductImage(imageUrl: product.imageUrl),
-                  if (_lowStock)
-                    Positioned(
-                      top: AppTokens.s8,
-                      right: AppTokens.s8,
-                      child: Container(
-                        padding: const EdgeInsets.symmetric(
-                            horizontal: AppTokens.s8, vertical: 3),
-                        decoration: BoxDecoration(
-                          color: AppTokens.accent,
-                          borderRadius: BorderRadius.circular(AppTokens.rPill),
-                        ),
-                        child: Text(
-                          'Only ${product.stock} left',
-                          style: const TextStyle(
-                            color: Colors.white,
-                            fontSize: 10,
-                            fontWeight: FontWeight.w800,
+    final effectivePrice = product.discountedPrice ?? product.price;
+    final stockInfo = _outOfStock ? 'Out of stock' : (_lowStock ? 'Only ${product.stock} left' : '');
+    final rxInfo = product.requiresPrescription ? 'Requires prescription' : '';
+    final semanticSummary = '${product.name}, ${product.unit}, Rupees ${_formatPrice(effectivePrice)}. $stockInfo $rxInfo'.trim();
+
+    return Semantics(
+      container: true,
+      label: semanticSummary,
+      hint: onTap != null ? 'Double tap to view details' : null,
+      button: onTap != null,
+      child: Card(
+        clipBehavior: Clip.antiAlias,
+        child: InkWell(
+          onTap: onTap,
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Expanded(
+                child: Stack(
+                  fit: StackFit.expand,
+                  children: [
+                    ProductImage(imageUrl: product.imageUrl),
+                    if (discountPercent != null)
+                      Positioned(
+                        bottom: AppTokens.s8,
+                        left: AppTokens.s8,
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: AppTokens.s8, vertical: 3),
+                          decoration: BoxDecoration(
+                            color: scheme.tertiary,
+                            borderRadius: BorderRadius.circular(AppTokens.rPill),
+                            boxShadow: AppTokens.shadowSm(scheme.tertiary),
+                          ),
+                          child: Text(
+                            '$discountPercent% OFF',
+                            style: textTheme.labelSmall?.copyWith(color: scheme.onTertiary),
                           ),
                         ),
                       ),
-                    ),
-                  if (product.requiresPrescription)
-                    Positioned(
-                      top: AppTokens.s8,
-                      left: AppTokens.s8,
-                      child: Container(
-                        padding: const EdgeInsets.symmetric(
-                            horizontal: AppTokens.s8, vertical: 3),
-                        decoration: BoxDecoration(
-                          color: AppTokens.medicine,
-                          borderRadius: BorderRadius.circular(AppTokens.rPill),
-                        ),
-                        child: const Text(
-                          'Rx',
-                          style: TextStyle(
-                            color: Colors.white,
-                            fontSize: 11,
-                            fontWeight: FontWeight.w800,
+                    if (_lowStock)
+                      Positioned(
+                        top: AppTokens.s8,
+                        right: AppTokens.s8,
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: AppTokens.s8, vertical: 3),
+                          decoration: BoxDecoration(
+                            color: AppTokens.accent,
+                            borderRadius: BorderRadius.circular(AppTokens.rPill),
+                          ),
+                          child: Text(
+                            'Only ${product.availableStock} left',
+                            style: textTheme.labelSmall?.copyWith(color: Colors.white, fontSize: 10),
                           ),
                         ),
                       ),
-                    ),
-                  if (_outOfStock)
-                    Container(
-                      color: scheme.surface.withValues(alpha: 0.7),
-                      alignment: Alignment.center,
-                      child: Container(
-                        padding: const EdgeInsets.symmetric(
-                            horizontal: AppTokens.s12, vertical: AppTokens.s4),
-                        decoration: BoxDecoration(
-                          color: scheme.errorContainer,
-                          borderRadius: BorderRadius.circular(AppTokens.rPill),
-                        ),
-                        child: Text(
-                          'OUT OF STOCK',
-                          style: TextStyle(
-                            color: scheme.onErrorContainer,
-                            fontSize: 11,
-                            fontWeight: FontWeight.w800,
+                    if (product.requiresPrescription)
+                      Positioned(
+                        top: AppTokens.s8,
+                        left: AppTokens.s8,
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: AppTokens.s8, vertical: 3),
+                          decoration: BoxDecoration(
+                            color: AppTokens.medicine,
+                            borderRadius: BorderRadius.circular(AppTokens.rPill),
+                          ),
+                          child: Text(
+                            'Rx',
+                            style: textTheme.labelSmall?.copyWith(color: Colors.white),
                           ),
                         ),
                       ),
-                    ),
-                ],
+                    if (_outOfStock)
+                      Container(
+                        color: scheme.surface.withValues(alpha: 0.7),
+                        alignment: Alignment.center,
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: AppTokens.s12, vertical: AppTokens.s4),
+                          decoration: BoxDecoration(
+                            color: scheme.errorContainer,
+                            borderRadius: BorderRadius.circular(AppTokens.rPill),
+                          ),
+                          child: Text(
+                            'OUT OF STOCK',
+                            style: textTheme.labelSmall?.copyWith(color: scheme.onErrorContainer),
+                          ),
+                        ),
+                      ),
+                  ],
+                ),
               ),
-            ),
-            Padding(
-              padding: const EdgeInsets.all(AppTokens.s12),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    product.name,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 14),
-                  ),
-                  const SizedBox(height: 2),
-                  Text(
-                    product.unit,
-                    style: TextStyle(color: scheme.onSurfaceVariant, fontSize: 12),
-                  ),
-                  const SizedBox(height: AppTokens.s8),
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    children: [
+              Padding(
+                padding: const EdgeInsets.all(AppTokens.s12),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      product.name,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: textTheme.labelLarge,
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      product.unit,
+                      style: textTheme.labelMedium,
+                    ),
+                    const SizedBox(height: AppTokens.s8),
+                    if (discountPercent != null) ...[
                       Text(
                         '₹${_formatPrice(product.price)}',
-                        style: TextStyle(
-                          color: scheme.primary,
-                          fontWeight: FontWeight.w800,
-                          fontSize: 15,
+                        style: textTheme.labelMedium?.copyWith(
+                          decoration: TextDecoration.lineThrough,
+                          color: scheme.onSurfaceVariant,
                         ),
                       ),
-                      quantityInCart > 0
-                          ? QuantityStepper(
-                              quantity: quantityInCart,
-                              onIncrement: onAdd,
-                              onDecrement: onRemove,
-                              canIncrement: quantityInCart < product.stock,
-                            )
-                          : _AddButton(enabled: !_outOfStock, onAdd: onAdd),
+                      const SizedBox(height: 1),
                     ],
-                  ),
-                ],
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        Flexible(
+                          child: Text(
+                            '₹${_formatPrice(product.discountedPrice ?? product.price)}',
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: textTheme.titleSmall?.copyWith(color: scheme.primary, fontWeight: FontWeight.w800),
+                          ),
+                        ),
+                        const SizedBox(width: 4),
+                        quantityInCart > 0
+                            ? QuantityStepper(
+                                quantity: quantityInCart,
+                                onIncrement: onAdd,
+                                onDecrement: onRemove,
+                                canIncrement: quantityInCart < product.availableStock,
+                                productName: product.name,
+                              )
+                            : _AddButton(enabled: !_outOfStock, onAdd: onAdd, productName: product.name),
+                      ],
+                    ),
+                  ],
+                ),
               ),
-            ),
-          ],
+            ],
+          ),
         ),
       ),
     );
@@ -160,29 +200,84 @@ class ProductCard extends StatelessWidget {
 class _AddButton extends StatelessWidget {
   final bool enabled;
   final VoidCallback onAdd;
+  final String productName;
 
-  const _AddButton({required this.enabled, required this.onAdd});
+  const _AddButton({required this.enabled, required this.onAdd, required this.productName});
 
   @override
   Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
-    return SizedBox(
-      height: 36,
-      child: OutlinedButton(
-        style: OutlinedButton.styleFrom(
-          minimumSize: const Size(64, 36),
-          padding: const EdgeInsets.symmetric(horizontal: AppTokens.s12),
-          side: BorderSide(color: enabled ? scheme.primary : scheme.outlineVariant),
-          foregroundColor: scheme.primary,
-          backgroundColor: scheme.primary.withValues(alpha: 0.06),
+    final label = enabled ? 'Add $productName to cart' : '$productName out of stock';
+    if (!enabled) {
+      return Semantics(
+        button: false,
+        label: label,
+        child: Container(
+          height: 36,
+          padding: const EdgeInsets.symmetric(horizontal: 12),
+          decoration: BoxDecoration(
+            color: Colors.grey.shade100,
+            borderRadius: BorderRadius.circular(AppTokens.rMd),
+            border: Border.all(color: Colors.grey.shade300),
+          ),
+          alignment: Alignment.center,
+          child: Text(
+            'NO STOCK',
+            style: TextStyle(
+              fontSize: 11,
+              fontWeight: FontWeight.bold,
+              color: Colors.grey.shade500,
+            ),
+          ),
         ),
-        onPressed: enabled
-            ? () {
-                HapticFeedback.selectionClick();
-                onAdd();
-              }
-            : null,
-        child: const Text('ADD', style: TextStyle(fontWeight: FontWeight.w800, fontSize: 13)),
+      );
+    }
+
+    return Semantics(
+      button: true,
+      label: label,
+      child: Material(
+        color: AppTokens.primary.withValues(alpha: 0.08),
+        borderRadius: BorderRadius.circular(AppTokens.rMd),
+        child: InkWell(
+          onTap: () {
+            HapticFeedback.lightImpact();
+            onAdd();
+            try {
+              SemanticsService.sendAnnouncement(
+                View.of(context),
+                'Added $productName to cart',
+                TextDirection.ltr,
+              );
+            } catch (_) {}
+          },
+          borderRadius: BorderRadius.circular(AppTokens.rMd),
+          child: Container(
+            height: 36,
+            constraints: const BoxConstraints(minWidth: 48, minHeight: 36),
+            padding: const EdgeInsets.symmetric(horizontal: 14),
+            decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(AppTokens.rMd),
+              border: Border.all(color: AppTokens.primary, width: 1.5),
+            ),
+            child: const Row(
+              mainAxisSize: MainAxisSize.min,
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Text(
+                  'ADD',
+                  style: TextStyle(
+                    fontWeight: FontWeight.w900,
+                    fontSize: 13,
+                    color: AppTokens.primary,
+                    letterSpacing: 0.5,
+                  ),
+                ),
+                SizedBox(width: 4),
+                Icon(Icons.add_rounded, size: 16, color: AppTokens.primary),
+              ],
+            ),
+          ),
+        ),
       ),
     );
   }

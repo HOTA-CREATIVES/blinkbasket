@@ -37,6 +37,12 @@ class FirebaseConfigRepository implements ConfigRepository {
         supportPhone: config.supportPhone,
         supportWhatsapp: config.supportWhatsapp,
         categories: config.categories,
+        maintenanceMode: config.maintenanceMode,
+        minimumOrderAmount: config.minimumOrderAmount,
+        maxOrdersPerSlot: config.maxOrdersPerSlot,
+        serviceZones: config.serviceZones,
+        privacyPolicy: config.privacyPolicy,
+        termsAndConditions: config.termsAndConditions,
       );
       await _db.collection('config').doc('app').set(dto.toMap(), SetOptions(merge: true));
     } catch (e) {
@@ -44,3 +50,4 @@ class FirebaseConfigRepository implements ConfigRepository {
     }
   }
 }
+

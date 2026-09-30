@@ -97,14 +97,26 @@ Below is the layout blueprint and element descriptions for each role's screen in
 
 #### 1. Customer Home Screen (`CustomerHomeScreen`)
 
+- **Navigation**: Modern **Floating Bottom Navigation Bar (`FloatingNavbar`)** occupying **~70% screen width**, horizontally centered with pill animations, micro-shadows, and safe area floating bounds.
 - **Tabs**:
-  - **Shop Tab**: Header showing current delivery village/phone. Search field with pill-shape borders. Horizontal list of category choice chips. GridView of product cards (showing cached images, name, unit, pricing, and an interactive "ADD" button that switches to increment/decrement controls when items are added).
-  - **Cart Tab** (wired to `CartScreen`): Lists added products. Calculates subtotals, tax/service fees. Selects delivery addresses from the saved address list. Opens location picker.
-  - **Orders Tab** (wired to `OrderHistoryScreen`): Lists previous and current order cards with statuses.
-  - **Profile Tab**: Swapped to the new [UserProfileScreen](file:///c:/Users/gurun/Documents/PROJECTS/hota-projects/hypermart/lib/modules/profile/screens/user_profile_screen.dart).
-- **Cart Summary Button**: Pushes bottom bar showing cart items count and total checkout amount.
+  - **Shop Tab**: Header showing current delivery village/phone. Search field with pill-shape borders. Horizontal list of category choice chips. Dual-column `GridView` of product cards with instant quantity steppers. Top right header profile avatar navigates directly to `UserProfileScreen`.
+  - **Cart Tab** (wired to `CartScreen`): Lists added products with persistence across app restarts (`SharedPreferences` + Firebase Cloud Sync). Shows delivery thresholds and navigates to `CheckoutScreen`.
+  - **Orders Tab** (wired to `OrderHistoryScreen`): Lists active and completed order cards with real-time status updates.
+- **Cart Summary Overhang**: Floating sticky bottom bar showing cart item count and total checkout preview when active.
 
-#### 2. Order Tracking Screen (`OrderTrackingScreen`)
+#### 2. Dedicated Checkout Screen (`CheckoutScreen`)
+
+- **Visual Design**: Sleek checkout review page with 20-minute delivery guarantee banner.
+- **Elements**:
+  - ⚡ **20-Min Flash Delivery Banner**: Prominent green gradient express delivery guarantee.
+  - **Delivery Contact & Location Card**: Formatted customer name/phone, saved address selector, custom address input, and interactive map pinning via `LeafletLocationPicker`.
+  - **Order Items Summary**: Product thumbnails, quantities, price breakdown, and medicine prescription warnings.
+  - **Special Delivery Instructions**: Text field for rider delivery notes.
+  - **Payment Selection**: Radio selectors for Cash on Delivery (COD) and Scan & Pay via UPI on Arrival.
+  - **Detailed Bill Breakdown**: Items Subtotal, Delivery Fee (Free delivery threshold handling), Taxes & Packaging Fee (₹5), and Grand Total.
+  - **Swipe-to-Confirm Slider**: `SwipeToConfirmSlider` widget requiring explicit swipe action to place order.
+
+#### 3. Order Tracking Screen (`OrderTrackingScreen`)
 
 - **Visual Design**: Real-time status roadmap showing visual progress milestones.
 - **Elements**:
@@ -234,11 +246,11 @@ sequenceDiagram
 
 ```mermaid
 flowchart LR
-    A[pending] -- Admin manual assignment --> B[assigned]
+    A[pending] -- Rider: Accept Broadcast Offer / Admin Assign --> B[assigned]
     B -- Rider: Swipe 'Pick Up' --> C[picked_up]
     C -- Rider: Swipe 'Start Delivery' --> D[out_for_delivery]
     D -- Rider: Input OTP & Match --> E[delivered]
-    D -- Rider: Invalid OTP / Cancel --> F[cancelled]
+    D -- Rider: Cancel Order --> F[cancelled]
 ```
 
 ---

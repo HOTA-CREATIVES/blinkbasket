@@ -6,7 +6,7 @@ import { initializeApp } from "firebase-admin/app";
 import { getFirestore, FieldValue, Timestamp } from "firebase-admin/firestore";
 import { getAuth } from "firebase-admin/auth";
 import { getMessaging } from "firebase-admin/messaging";
-import { createHash, randomBytes } from "crypto";
+import { createHash, randomBytes, randomInt } from "crypto";
 
 initializeApp();
 const db = getFirestore();
@@ -14,8 +14,8 @@ const db = getFirestore();
 // Cloudinary secret lives in Secret Manager, never in source or the client
 // binary. Set with: firebase functions:secrets:set CLOUDINARY_API_SECRET
 const cloudinaryApiSecret = defineSecret("CLOUDINARY_API_SECRET");
+const cloudinaryApiKey = defineSecret("CLOUDINARY_API_KEY");
 const CLOUDINARY_CLOUD_NAME = "diiyy6bar";
-const CLOUDINARY_API_KEY = "446958312948211";
 const CLOUDINARY_UPLOAD_FOLDER = "products";
 
 // Mumbai region — closest to the Bhimavaram service area.
@@ -24,6 +24,40 @@ const REGION = "asia-south1";
 const MAX_ITEMS_PER_ORDER = 50;
 const MAX_QTY_PER_ITEM = 99;
 const MAX_OTP_ATTEMPTS = 5;
+// After MAX_OTP_ATTEMPTS wrong tries the rider is locked out for a cooldown
+// instead of forever, so a fat-fingered OTP can't strand an order (the admin
+// has no reset UI). MAX_OTP_TOTAL_ATTEMPTS is the hard lifetime cap per order
+// that still needs an admin resetOtpAttempts.
+const OTP_LOCKOUT_MINUTES = 10;
+const MAX_OTP_TOTAL_ATTEMPTS = 15;
+const ACTIVE_ORDER_STATUSES = ["pending", "assigned", "picked_up", "out_for_delivery"];
+const ACTIVE_ORDER_MESSAGE =
+  "You already have an active order in progress. You can only place one order at a time.";
+
+// ── Simple in-memory rate limiter ────────────────────────────────────
+// Resets when the function instance cold-starts. For stricter limits,
+// use Firebase App Check + Cloud Armor or a Redis-backed counter.
+const RATE_LIMIT_WINDOW_MS = 60_000; // 1 minute
+const RATE_LIMIT_MAX_CALLS = 20;     // max calls per window per UID
+const rateLimitStore = new Map<string, { count: number; windowStart: number }>();
+
+// Keyed by "action:uid" rather than uid alone — a burst on one callable
+// (e.g. an admin uploading several product images via
+// getCloudinarySignature) must not lock the same user out of an unrelated
+// action (placeOrder, cancelOrder, ...).
+function checkRateLimit(uid: string, action: string): void {
+  const key = `${action}:${uid}`;
+  const now = Date.now();
+  const entry = rateLimitStore.get(key);
+  if (!entry || now - entry.windowStart > RATE_LIMIT_WINDOW_MS) {
+    rateLimitStore.set(key, { count: 1, windowStart: now });
+    return;
+  }
+  entry.count++;
+  if (entry.count > RATE_LIMIT_MAX_CALLS) {
+    throw new HttpsError("resource-exhausted", "Too many requests. Please try again later.");
+  }
+}
 
 // Blinkit-style rider auto-broadcast: tier-1 (village-matched on-duty riders)
 // escalates to tier-2 (all on-duty riders) after this many seconds with no
@@ -31,7 +65,16 @@ const MAX_OTP_ATTEMPTS = 5;
 // this same cadence by the escalateStaleOrders scheduled function — there is
 // no admin manual-assign fallback, so this must never give up.
 const BROADCAST_RETRY_SECONDS = 90;
+// Each unaccepted order is (re)broadcast at most this many times (~15 min at
+// the 90s cadence). Without a cap, one stuck order pushed every on-duty rider
+// ~960 times over its 24h life. After the cap it stops pushing and stays
+// visible to riders in-app and to the admin as "searching" until it's taken,
+// cancelled, or expires.
+const MAX_BROADCASTS = 10;
 const ESCALATOR_BATCH_LIMIT = 200;
+// Orders pending longer than this are auto-cancelled by expireStaleOrders.
+// Kept generous so a rider broadcast cycle has time to work.
+const EXPIRY_HOURS = 24;
 
 interface OrderItemInput {
   productId: string;
@@ -65,13 +108,22 @@ function haversineMeters(lat1: number, lon1: number, lat2: number, lon2: number)
   return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
 }
 
-function distanceToNearestVillageMeters(lat: number, lng: number): number {
-  let min = Infinity;
+function nearestVillage(lat: number, lng: number): { name: string; distance: number } {
+  let best = { name: "", distance: Infinity };
   for (const v of VILLAGES) {
     const d = haversineMeters(lat, lng, v.latitude, v.longitude);
-    if (d < min) min = d;
+    if (d < best.distance) best = { name: v.name, distance: d };
   }
-  return min;
+  return best;
+}
+
+// A real house pin never lands within a few metres of a village centroid, but
+// the client's map default / "no pin" fallback is exactly a centroid. Treat it
+// as "customer never pinned" so riders don't get a fake location.
+const CENTROID_PLACEHOLDER_METERS = 5;
+
+function isValidCoordinate(lat: number, lng: number): boolean {
+  return Number.isFinite(lat) && Number.isFinite(lng) && Math.abs(lat) <= 90 && Math.abs(lng) <= 180;
 }
 
 async function getFcmTokens(collection: "users" | "deliveryBoys", uid: string): Promise<string[]> {
@@ -174,22 +226,20 @@ async function sendPushToTokens(
 async function broadcastNewOrder(orderId: string, order: FirebaseFirestore.DocumentData): Promise<void> {
   const village = String(order.village ?? "");
 
-  let tier = 1;
-  let candidates = await db.collection("deliveryBoys")
+  // Village names are admin-editable free text, so match them trimmed and
+  // case-insensitively in memory rather than with an exact Firestore ==
+  // (which silently fell through to tier 2 on any casing/whitespace drift).
+  const normalize = (s: unknown) => String(s ?? "").trim().toLowerCase();
+  const onDutyRiders = await db.collection("deliveryBoys")
     .where("isActive", "==", true)
     .where("onDuty", "==", true)
-    .where("village", "==", village)
     .get();
+  const localRiders = onDutyRiders.docs.filter((d) => normalize(d.data().village) === normalize(village));
 
-  if (candidates.empty) {
-    tier = 2;
-    candidates = await db.collection("deliveryBoys")
-      .where("isActive", "==", true)
-      .where("onDuty", "==", true)
-      .get();
-  }
+  const tier = localRiders.length > 0 ? 1 : 2;
+  const candidateDocs = tier === 1 ? localRiders : onDutyRiders.docs;
 
-  const tokenOwners = tokenOwnersFromDocs(candidates.docs);
+  const tokenOwners = tokenOwnersFromDocs(candidateDocs);
   const tokens = Array.from(tokenOwners.keys());
 
   await sendPushToTokens(
@@ -201,7 +251,7 @@ async function broadcastNewOrder(orderId: string, order: FirebaseFirestore.Docum
   );
 
   await db.collection("orders").doc(orderId).set(
-    { notifyTier: tier, notifiedAt: Timestamp.now() },
+    { notifyTier: tier, notifiedAt: Timestamp.now(), broadcastCount: 1 },
     { merge: true }
   );
 }
@@ -215,14 +265,16 @@ async function broadcastNewOrder(orderId: string, order: FirebaseFirestore.Docum
  * The 4-digit delivery OTP is written to orders/{id}/private/delivery,
  * which security rules expose to the ordering customer only.
  */
-export const placeOrder = onCall({ region: REGION, enforceAppCheck: true }, async (request) => {
+export const placeOrder = onCall({ region: REGION, enforceAppCheck: process.env.FUNCTIONS_EMULATOR !== "true" }, async (request) => {
   const uid = request.auth?.uid;
   if (!uid) {
     throw new HttpsError("unauthenticated", "Sign in to place an order.");
   }
+  checkRateLimit(uid, "placeOrder");
 
   const items = request.data?.items as OrderItemInput[] | undefined;
   const deliveryAddress = String(request.data?.deliveryAddress ?? "").trim();
+  const deliveryInstructions = String(request.data?.deliveryInstructions ?? "").trim().slice(0, 500);
   const latitude = request.data?.latitude !== undefined ? Number(request.data.latitude) : null;
   const longitude = request.data?.longitude !== undefined ? Number(request.data.longitude) : null;
 
@@ -235,16 +287,23 @@ export const placeOrder = onCall({ region: REGION, enforceAppCheck: true }, asyn
   if (!deliveryAddress || deliveryAddress.length > 500) {
     throw new HttpsError("invalid-argument", "A valid delivery address is required.");
   }
-  if (latitude === null || longitude === null || Number.isNaN(latitude) || Number.isNaN(longitude)) {
+  if (latitude === null || longitude === null || !isValidCoordinate(latitude, longitude)) {
     throw new HttpsError(
       "invalid-argument",
       "A delivery location (GPS coordinates) is required to place an order."
     );
   }
-  if (distanceToNearestVillageMeters(latitude, longitude) > SERVICE_RADIUS_METERS) {
+  const nearest = nearestVillage(latitude, longitude);
+  if (nearest.distance > SERVICE_RADIUS_METERS) {
     throw new HttpsError(
       "failed-precondition",
       "This delivery address is outside our service area."
+    );
+  }
+  if (nearest.distance < CENTROID_PLACEHOLDER_METERS) {
+    throw new HttpsError(
+      "invalid-argument",
+      "Please pin your exact delivery location on the map."
     );
   }
   const seen = new Set<string>();
@@ -278,13 +337,44 @@ export const placeOrder = onCall({ region: REGION, enforceAppCheck: true }, asyn
   if (config.storeOpen === false) {
     throw new HttpsError("failed-precondition", "The store is currently closed. Please try later.");
   }
+  if (config.maintenanceMode === true) {
+    throw new HttpsError(
+      "failed-precondition",
+      "The store is under maintenance right now. Please try again shortly."
+    );
+  }
+
+  // Fast pre-check for a friendly early error (also covers orders that
+  // predate the lock doc). The authoritative one-active-order guard is the
+  // orderLocks doc inside the transaction below — this query alone can't stop
+  // two concurrent requests from both passing.
+  const activeOrderSnap = await db.collection("orders")
+    .where("customerId", "==", uid)
+    .where("status", "in", ACTIVE_ORDER_STATUSES)
+    .limit(1)
+    .get();
+  if (!activeOrderSnap.empty) {
+    throw new HttpsError("failed-precondition", ACTIVE_ORDER_MESSAGE);
+  }
   const deliveryFeeConfig = Number(config.deliveryFee ?? 30);
   const freeDeliveryAbove = Number(config.freeDeliveryAbove ?? 300);
+  const minimumOrderAmount = Number(config.minimumOrderAmount ?? 0);
 
-  const otp = String(Math.floor(1000 + Math.random() * 9000));
+  const otp = String(randomInt(1000, 10000));
   const orderRef = db.collection("orders").doc();
+  const lockRef = db.collection("orderLocks").doc(uid);
 
   const totals = await db.runTransaction(async (tx) => {
+    // All reads first (Firestore requires reads before writes in a tx).
+    const lockSnap = await tx.get(lockRef);
+    const lockedOrderId = lockSnap.exists ? lockSnap.data()?.orderId : undefined;
+    if (typeof lockedOrderId === "string" && lockedOrderId) {
+      const lockedOrderSnap = await tx.get(db.collection("orders").doc(lockedOrderId));
+      if (lockedOrderSnap.exists && ACTIVE_ORDER_STATUSES.includes(lockedOrderSnap.data()?.status)) {
+        throw new HttpsError("failed-precondition", ACTIVE_ORDER_MESSAGE);
+      }
+    }
+
     const productRefs = items.map((item) => db.collection("products").doc(item.productId));
     const productSnaps = await tx.getAll(...productRefs);
 
@@ -295,10 +385,28 @@ export const placeOrder = onCall({ region: REGION, enforceAppCheck: true }, asyn
         throw new HttpsError("not-found", "One of the products is no longer available.");
       }
       const product = snap.data() as FirebaseFirestore.DocumentData;
+      // Prescription medicines can't be sold without verifying a prescription,
+      // and the app has no prescription upload/verification flow yet — so they
+      // are blocked here rather than sold unverified. Lift this when a real
+      // verification step exists.
+      if (product.requiresPrescription === true) {
+        throw new HttpsError(
+          "failed-precondition",
+          `"${product.name}" is a prescription medicine and can't be ordered in the app yet.`
+        );
+      }
+      if (product.isActive === false) {
+        throw new HttpsError(
+          "failed-precondition",
+          `"${product.name}" is not currently available for purchase.`
+        );
+      }
       const stockVal = Number(product.stock ?? 0);
       const physicalStock = Number(product.physicalStock ?? stockVal);
       const reservedStock = Number(product.reservedStock ?? 0);
-      const availableStock = Number(product.availableStock ?? (physicalStock - reservedStock));
+      // Always derive from the source-of-truth fields — a stored
+      // availableStock edited by hand in the console must not be trusted.
+      const availableStock = physicalStock - reservedStock;
 
       if (availableStock < item.quantity) {
         throw new HttpsError(
@@ -330,6 +438,7 @@ export const placeOrder = onCall({ region: REGION, enforceAppCheck: true }, asyn
       tx.set(ledgerRef, {
         productId: snap.id,
         adminId: uid,
+        actorType: "customer",
         changeType: "reserve",
         physicalDelta: 0,
         reservedDelta: item.quantity,
@@ -345,16 +454,27 @@ export const placeOrder = onCall({ region: REGION, enforceAppCheck: true }, asyn
       };
     });
 
+    if (minimumOrderAmount > 0 && subtotal < minimumOrderAmount) {
+      throw new HttpsError(
+        "failed-precondition",
+        `Minimum order amount is ₹${minimumOrderAmount}.`
+      );
+    }
+
     const deliveryFee = subtotal > freeDeliveryAbove ? 0 : deliveryFeeConfig;
     const totalAmount = subtotal + deliveryFee;
     const now = Timestamp.now();
 
+    tx.set(lockRef, { orderId: orderRef.id, updatedAt: now });
     tx.set(orderRef, {
       customerId: uid,
       customerName: String(user.name ?? ""),
       customerPhone: String(user.phone ?? ""),
       deliveryAddress,
-      village: String(user.village ?? ""),
+      deliveryInstructions: deliveryInstructions || null,
+      // Derived from the pinned coordinates (not the profile's village) so a
+      // customer with addresses in several villages routes to the right riders.
+      village: nearest.name,
       latitude,
       longitude,
       items: orderItems,
@@ -387,15 +507,140 @@ export const placeOrder = onCall({ region: REGION, enforceAppCheck: true }, asyn
 });
 
 /**
- * Verifies the customer's delivery OTP and marks the order delivered.
- * Callable only by the rider the order is assigned to, only while the
- * order is out for delivery, with a capped number of attempts.
+ * Allows a customer to cancel their order if it is still in the 'pending' state.
+ * Stock release is handled by the onOrderWritten trigger (same path as
+ * expireStaleOrders) to avoid double-release bugs.
  */
-export const verifyDeliveryOtp = onCall({ region: REGION, enforceAppCheck: true }, async (request) => {
+export const cancelOrder = onCall({ region: REGION, enforceAppCheck: process.env.FUNCTIONS_EMULATOR !== "true" }, async (request) => {
+  const uid = request.auth?.uid;
+  if (!uid) {
+    throw new HttpsError("unauthenticated", "Sign in to cancel an order.");
+  }
+  checkRateLimit(uid, "cancelOrder");
+
+  const orderId = String(request.data?.orderId ?? "").trim();
+  const reason = String(request.data?.reason ?? "Cancelled by customer").trim();
+
+  if (!orderId) {
+    throw new HttpsError("invalid-argument", "Order ID is required.");
+  }
+
+  const orderRef = db.collection("orders").doc(orderId);
+
+  await db.runTransaction(async (tx) => {
+    const orderSnap = await tx.get(orderRef);
+    if (!orderSnap.exists) {
+      throw new HttpsError("not-found", "Order not found.");
+    }
+
+    const order = orderSnap.data() as FirebaseFirestore.DocumentData;
+
+    // Check if caller is active admin
+    const adminSnap = await tx.get(db.collection("admins").doc(uid));
+    const isAdmin = adminSnap.exists && adminSnap.data()?.isActive !== false;
+
+    if (!isAdmin && order.customerId !== uid) {
+      throw new HttpsError("permission-denied", "You can only cancel your own orders.");
+    }
+
+    if (!isAdmin && order.status !== "pending" && order.status !== "assigned") {
+      throw new HttpsError(
+        "failed-precondition",
+        `Order cannot be cancelled once in status '${order.status}'.`
+      );
+    }
+
+    const cancelledByRole = isAdmin ? "admin" : "customer";
+
+    tx.update(orderRef, {
+      status: "cancelled",
+      cancelReason: reason,
+      cancelledBy: cancelledByRole,
+      cancelledById: uid,
+      updatedAt: Timestamp.now(),
+    });
+  });
+
+  return { success: true };
+});
+
+const DELIVERY_FAILURE_REASONS = [
+  "Customer unreachable",
+  "Customer refused delivery",
+  "Wrong or inaccessible address",
+  "Other",
+] as const;
+
+/**
+ * Lets the assigned rider report that an out-for-delivery (or earlier)
+ * order could not actually be handed over — e.g. the customer doesn't
+ * answer, refuses COD, or the address doesn't exist. Without this there was
+ * no way to ever get an order out of an in-progress state short of a manual
+ * Firestore console edit: verifyDeliveryOtp is the only path to 'delivered',
+ * and the client rules only let a rider advance status forward one step, so
+ * a stuck order had no way out for the rider or the customer.
+ * Stock release + ledger entry is handled by the existing onOrderWritten
+ * cancellation branch, same as cancelOrder/expireStaleOrders.
+ */
+export const reportDeliveryFailure = onCall({ region: REGION, enforceAppCheck: process.env.FUNCTIONS_EMULATOR !== "true" }, async (request) => {
   const uid = request.auth?.uid;
   if (!uid) {
     throw new HttpsError("unauthenticated", "Sign in first.");
   }
+  checkRateLimit(uid, "reportDeliveryFailure");
+
+  const orderId = String(request.data?.orderId ?? "").trim();
+  const reasonInput = String(request.data?.reason ?? "").trim();
+  const reason = (DELIVERY_FAILURE_REASONS as readonly string[]).includes(reasonInput)
+    ? reasonInput
+    : "Other";
+
+  if (!orderId) {
+    throw new HttpsError("invalid-argument", "Order ID is required.");
+  }
+
+  const orderRef = db.collection("orders").doc(orderId);
+
+  await db.runTransaction(async (tx) => {
+    const orderSnap = await tx.get(orderRef);
+    if (!orderSnap.exists) {
+      throw new HttpsError("not-found", "Order not found.");
+    }
+
+    const order = orderSnap.data() as FirebaseFirestore.DocumentData;
+    if (order.deliveryBoyId !== uid) {
+      throw new HttpsError("permission-denied", "This order isn't assigned to you.");
+    }
+
+    if (!["assigned", "picked_up", "out_for_delivery"].includes(order.status)) {
+      throw new HttpsError(
+        "failed-precondition",
+        "This order is no longer in a state that can be marked undelivered."
+      );
+    }
+
+    tx.update(orderRef, {
+      status: "cancelled",
+      cancelReason: reason,
+      cancelledBy: "rider",
+      updatedAt: Timestamp.now(),
+    });
+  });
+
+  return { success: true };
+});
+
+/**
+ * Verifies the customer's delivery OTP and marks the order delivered.
+ * Callable only by the rider the order is assigned to, only while the
+ * order is out for delivery, with a capped number of attempts.
+ */
+export const verifyDeliveryOtp = onCall({ region: REGION, enforceAppCheck: process.env.FUNCTIONS_EMULATOR !== "true" }, async (request) => {
+  const uid = request.auth?.uid;
+  if (!uid) {
+    throw new HttpsError("unauthenticated", "Sign in first.");
+  }
+  checkRateLimit(uid, "verifyDeliveryOtp");
 
   const orderId = String(request.data?.orderId ?? "");
   const otp = String(request.data?.otp ?? "").trim();
@@ -416,6 +661,11 @@ export const verifyDeliveryOtp = onCall({ region: REGION, enforceAppCheck: true 
     if (order.deliveryBoyId !== uid) {
       throw new HttpsError("permission-denied", "This order is not assigned to you.");
     }
+    // Idempotent: a retry after the network dropped the first response must
+    // not tell the rider their (already committed) delivery failed.
+    if (order.status === "delivered") {
+      return { kind: "delivered" as const };
+    }
     if (order.status !== "out_for_delivery") {
       throw new HttpsError("failed-precondition", "Order is not out for delivery.");
     }
@@ -426,15 +676,37 @@ export const verifyDeliveryOtp = onCall({ region: REGION, enforceAppCheck: true 
       throw new HttpsError("internal", "Delivery verification data missing. Contact admin.");
     }
     const secret = privateSnap.data() as FirebaseFirestore.DocumentData;
+    // The payout rate in force at delivery time is frozen onto the order, so
+    // later rate changes never reprice a rider's history.
+    const configSnap = await tx.get(db.collection("config").doc("app"));
+    const riderPayout = Number(configSnap.data()?.riderPayoutPerDelivery ?? 30);
 
-    const attempts = Number(secret.attempts ?? 0);
-    if (attempts >= MAX_OTP_ATTEMPTS) {
-      return "too_many_attempts";
+    const totalAttempts = Number(secret.totalAttempts ?? secret.attempts ?? 0);
+    if (totalAttempts >= MAX_OTP_TOTAL_ATTEMPTS) {
+      return { kind: "hard_locked" as const };
     }
 
+    const nowMs = Date.now();
+    const lockedUntilMs = secret.lockedUntil instanceof Timestamp ? secret.lockedUntil.toMillis() : 0;
+    if (lockedUntilMs > nowMs) {
+      return { kind: "cooling_down" as const, minutes: Math.ceil((lockedUntilMs - nowMs) / 60000) };
+    }
+    // A lockout that has expired starts a fresh window of attempts.
+    const windowAttempts = lockedUntilMs > 0 ? 0 : Number(secret.attempts ?? 0);
+
     if (secret.otp !== otp) {
-      tx.update(privateRef, { attempts: FieldValue.increment(1) });
-      return "wrong_otp";
+      const newWindow = windowAttempts + 1;
+      const lockNow = newWindow >= MAX_OTP_ATTEMPTS;
+      tx.update(privateRef, {
+        attempts: lockNow ? 0 : newWindow,
+        totalAttempts: totalAttempts + 1,
+        lockedUntil: lockNow ? Timestamp.fromMillis(nowMs + OTP_LOCKOUT_MINUTES * 60000) : null,
+      });
+      return {
+        kind: "wrong_otp" as const,
+        remaining: lockNow ? 0 : MAX_OTP_ATTEMPTS - newWindow,
+        locked: lockNow,
+      };
     }
 
     // Release stock reservation and decrement physical stock
@@ -469,6 +741,7 @@ export const verifyDeliveryOtp = onCall({ region: REGION, enforceAppCheck: true 
           tx.set(ledgerRef, {
             productId: item.productId,
             adminId: uid, // Rider UID who verified
+            actorType: "rider",
             orderId: orderId,
             changeType: "sale",
             physicalDelta: -item.quantity,
@@ -480,21 +753,41 @@ export const verifyDeliveryOtp = onCall({ region: REGION, enforceAppCheck: true 
       }
     }
 
-    tx.update(orderRef, { status: "delivered", updatedAt: Timestamp.now() });
-    return "delivered";
+    const deliveredNow = Timestamp.now();
+    tx.update(orderRef, {
+      status: "delivered",
+      paymentStatus: "paid",
+      codCollectedAmount: Number(order.totalAmount ?? 0),
+      codCollectedBy: uid,
+      codCollectedAt: deliveredNow,
+      riderPayout,
+      deliveredAt: deliveredNow,
+      updatedAt: deliveredNow,
+    });
+    return { kind: "delivered" as const };
   });
 
-  if (outcome === "too_many_attempts") {
-    throw new HttpsError(
-      "resource-exhausted",
-      "Too many incorrect attempts. Ask the admin to confirm this delivery."
-    );
+  switch (outcome.kind) {
+    case "hard_locked":
+      throw new HttpsError(
+        "resource-exhausted",
+        "Too many incorrect attempts on this order. Ask the admin to reset OTP verification."
+      );
+    case "cooling_down":
+      throw new HttpsError(
+        "resource-exhausted",
+        `Too many incorrect attempts. Try again in ${outcome.minutes} minute${outcome.minutes === 1 ? "" : "s"}.`
+      );
+    case "wrong_otp":
+      throw new HttpsError(
+        "permission-denied",
+        outcome.locked
+          ? `Incorrect delivery OTP. Locked for ${OTP_LOCKOUT_MINUTES} minutes.`
+          : `Incorrect delivery OTP. ${outcome.remaining} attempt${outcome.remaining === 1 ? "" : "s"} left.`
+      );
+    default:
+      return { success: true };
   }
-  if (outcome === "wrong_otp") {
-    throw new HttpsError("permission-denied", "Incorrect delivery OTP.");
-  }
-
-  return { success: true };
 });
 
 /**
@@ -502,7 +795,7 @@ export const verifyDeliveryOtp = onCall({ region: REGION, enforceAppCheck: true 
  * MAX_OTP_ATTEMPTS cap: resets the attempt counter so the rider can retry
  * (or the admin can walk the customer through re-reading the OTP).
  */
-export const resetOtpAttempts = onCall({ region: REGION, enforceAppCheck: true }, async (request) => {
+export const resetOtpAttempts = onCall({ region: REGION, enforceAppCheck: process.env.FUNCTIONS_EMULATOR !== "true" }, async (request) => {
   const uid = request.auth?.uid;
   if (!uid) {
     throw new HttpsError("unauthenticated", "Sign in first.");
@@ -524,7 +817,7 @@ export const resetOtpAttempts = onCall({ region: REGION, enforceAppCheck: true }
     throw new HttpsError("not-found", "No delivery verification data for this order.");
   }
 
-  await privateRef.update({ attempts: 0 });
+  await privateRef.update({ attempts: 0, totalAttempts: 0, lockedUntil: null });
   console.log(`[OTP_ATTEMPTS_RESET] order ${orderId} reset by admin ${uid}`);
 
   return { success: true };
@@ -547,11 +840,12 @@ export const resetOtpAttempts = onCall({ region: REGION, enforceAppCheck: true }
  * onOrderWritten's notifyOnStatusChange (below) already handles for both
  * the customer and rider push, plus the dashboard stats delta.
  */
-export const acceptOrder = onCall({ region: REGION, enforceAppCheck: true }, async (request) => {
+export const acceptOrder = onCall({ region: REGION, enforceAppCheck: process.env.FUNCTIONS_EMULATOR !== "true" }, async (request) => {
   const uid = request.auth?.uid;
   if (!uid) {
     throw new HttpsError("unauthenticated", "Sign in first.");
   }
+  checkRateLimit(uid, "acceptOrder");
   if (request.auth?.token?.delivery !== true) {
     throw new HttpsError("permission-denied", "Only delivery partners can accept orders.");
   }
@@ -580,6 +874,11 @@ export const acceptOrder = onCall({ region: REGION, enforceAppCheck: true }, asy
       throw new HttpsError("not-found", "Order not found.");
     }
     const order = snap.data() as FirebaseFirestore.DocumentData;
+    // Idempotent for the rider who already won it (double-tap / retry after a
+    // dropped response) — otherwise they'd be told "taken by another rider".
+    if (order.deliveryBoyId === uid && order.status === "assigned") {
+      return "accepted";
+    }
     if (order.status !== "pending" || order.deliveryBoyId) {
       return "taken";
     }
@@ -644,9 +943,15 @@ export const onOrderWritten = onDocumentWritten({ region: REGION, document: "ord
         const itemsList = (afterData.items || []) as { productId: string; quantity: number }[];
         if (itemsList.length > 0) {
           const productRefs = itemsList.map(item => db.collection("products").doc(item.productId));
+          const orderRef = event.data!.after.ref;
           try {
             await db.runTransaction(async (tx) => {
-              const productSnaps = await tx.getAll(...productRefs);
+              // Re-read the order inside the tx: the event snapshot's
+              // `stockReleased` is stale for a retried / concurrent trigger
+              // delivery, which would release the same reservation twice and
+              // eat other orders' reserved stock.
+              const [orderSnap, ...productSnaps] = await tx.getAll(orderRef, ...productRefs);
+              if (orderSnap.data()?.stockReleased) return;
               for (let i = 0; i < itemsList.length; i++) {
                 const item = itemsList[i];
                 const prodSnap = productSnaps[i];
@@ -668,9 +973,28 @@ export const onOrderWritten = onDocumentWritten({ region: REGION, document: "ord
 
                   // Write inventory log for the return (cancellation)
                   const ledgerRef = db.collection("inventoryLogs").doc();
+                  // cancelledBy carries who actually triggered this release
+                  // (customer via cancelOrder, rider via reportDeliveryFailure,
+                  // system via auto-expire) — attribute both the actor id and
+                  // actorType to whoever that really was, instead of always
+                  // blaming the customer or falling back to the DTO's
+                  // "admin" default.
+                  const cancelActorType = afterData.cancelledBy === "customer"
+                    ? "customer"
+                    : afterData.cancelledBy === "rider"
+                      ? "rider"
+                      : afterData.cancelledBy === "admin"
+                        ? "admin"
+                        : "system";
+                  const cancelActorId = afterData.cancelledBy === "rider"
+                    ? (afterData.deliveryBoyId || "system")
+                    : afterData.cancelledBy === "admin"
+                      ? (afterData.cancelledById || "system")
+                      : (afterData.customerId || "system");
                   tx.set(ledgerRef, {
                     productId: item.productId,
-                    adminId: afterData.customerId || "system",
+                    adminId: cancelActorId,
+                    actorType: cancelActorType,
                     orderId: event.params.orderId,
                     changeType: "return",
                     physicalDelta: 0,
@@ -680,7 +1004,7 @@ export const onOrderWritten = onDocumentWritten({ region: REGION, document: "ord
                   });
                 }
               }
-              tx.set(event.data!.after.ref, { stockReleased: true }, { merge: true });
+              tx.set(orderRef, { stockReleased: true }, { merge: true });
             });
           } catch (err) {
             console.error(
@@ -877,11 +1201,12 @@ export const onAdminWritten = onDocumentWritten({ region: REGION, document: "adm
  * Creates a rider auth user login and registers them in deliveryBoys collection.
  * Only callable by authenticated admins.
  */
-export const createRiderLogin = onCall({ region: REGION, enforceAppCheck: true }, async (request) => {
+export const createRiderLogin = onCall({ region: REGION, enforceAppCheck: process.env.FUNCTIONS_EMULATOR !== "true" }, async (request) => {
   const uid = request.auth?.uid;
   if (!uid) {
     throw new HttpsError("unauthenticated", "Sign in first.");
   }
+  checkRateLimit(uid, "createRiderLogin");
 
   // Verify that the caller is an active admin
   const adminSnap = await db.collection("admins").doc(uid).get();
@@ -943,53 +1268,20 @@ export const createRiderLogin = onCall({ region: REGION, enforceAppCheck: true }
 });
 
 /**
- * Sends a one-off test push to a customer or rider's registered devices.
- * Admin-only. Exists purely so push delivery can be verified from the
- * Firebase console without walking a real order through its full lifecycle.
- */
-export const sendTestPush = onCall({ region: REGION, enforceAppCheck: true }, async (request) => {
-  const uid = request.auth?.uid;
-  if (!uid) {
-    throw new HttpsError("unauthenticated", "Sign in first.");
-  }
-
-  const adminSnap = await db.collection("admins").doc(uid).get();
-  if (!adminSnap.exists || adminSnap.data()?.isActive === false) {
-    throw new HttpsError("permission-denied", "Only active admins can send test pushes.");
-  }
-
-  const targetUid = String(request.data?.targetUid ?? "").trim();
-  const collection = request.data?.collection === "deliveryBoys" ? "deliveryBoys" : "users";
-  const title = String(request.data?.title ?? "Test notification").trim();
-  const body = String(request.data?.body ?? "This is a test push from J C Mart admin.").trim();
-
-  if (!targetUid) {
-    throw new HttpsError("invalid-argument", "targetUid is required.");
-  }
-
-  const tokens = await getFcmTokens(collection, targetUid);
-  if (tokens.length === 0) {
-    throw new HttpsError("failed-precondition", "That user has no registered devices for push.");
-  }
-
-  await sendPushToTokens(tokens, title, body, { test: "true" });
-  return { success: true, tokensNotified: tokens.length };
-});
-
-/**
  * Computes a signed Cloudinary upload signature server-side so the API
  * secret never ships inside the client binary. Admin-only — the only
  * current image uploads (product photos, banners) are admin actions.
  */
 export const getCloudinarySignature = onCall(
-  { region: REGION, secrets: [cloudinaryApiSecret], enforceAppCheck: true },
+  { region: REGION, secrets: [cloudinaryApiSecret, cloudinaryApiKey], enforceAppCheck: process.env.FUNCTIONS_EMULATOR !== "true" },
   async (request) => {
-    const uid = request.auth?.uid;
-    if (!uid) {
-      throw new HttpsError("unauthenticated", "Sign in first.");
-    }
+  const uid = request.auth?.uid;
+  if (!uid) {
+    throw new HttpsError("unauthenticated", "Sign in first.");
+  }
+  checkRateLimit(uid, "getCloudinarySignature");
 
-    const adminSnap = await db.collection("admins").doc(uid).get();
+  const adminSnap = await db.collection("admins").doc(uid).get();
     if (!adminSnap.exists || adminSnap.data()?.isActive === false) {
       throw new HttpsError("permission-denied", "Only active admins can upload images.");
     }
@@ -1002,7 +1294,7 @@ export const getCloudinarySignature = onCall(
     return {
       timestamp,
       signature,
-      apiKey: CLOUDINARY_API_KEY,
+      apiKey: cloudinaryApiKey.value(),
       cloudName: CLOUDINARY_CLOUD_NAME,
       folder,
     };
@@ -1044,6 +1336,19 @@ export const escalateStaleOrders = onSchedule(
 
     for (const doc of stale.docs) {
       const order = doc.data();
+      const count = Number(order.broadcastCount ?? 1);
+
+      if (count >= MAX_BROADCASTS) {
+        // Stop pushing. Push notifiedAt far into the future so this order
+        // drops out of the `notifiedAt <= cutoff` query (and out of the batch
+        // limit) instead of being re-evaluated every minute.
+        await doc.ref.set({
+          broadcastExhausted: true,
+          notifiedAt: Timestamp.fromMillis(Date.now() + 30 * 24 * 3600 * 1000),
+        }, { merge: true });
+        console.warn(`[BROADCAST_EXHAUSTED] order ${doc.id} unaccepted after ${count} broadcasts.`);
+        continue;
+      }
 
       await sendPushToTokens(
         tokens,
@@ -1053,8 +1358,168 @@ export const escalateStaleOrders = onSchedule(
         tokenOwners
       );
 
-      await doc.ref.set({ notifyTier: 2, notifiedAt: Timestamp.now() }, { merge: true });
+      await doc.ref.set(
+        { notifyTier: 2, notifiedAt: Timestamp.now(), broadcastCount: count + 1 },
+        { merge: true }
+      );
     }
   }
 );
+
+/**
+ * Auto-cancels orders that have been pending (unassigned) for longer than
+ * EXPIRY_HOURS. This releases stranded stock reservations — the existing
+ * onOrderWritten cancellation branch handles the stock release + ledger
+ * write automatically.
+ *
+ * Runs every 30 minutes. Processes at most ESCALATOR_BATCH_LIMIT orders
+ * per invocation to stay within the Functions timeout.
+ */
+export const expireStaleOrders = onSchedule(
+  { region: REGION, schedule: "every 30 minutes" },
+  async () => {
+    const cutoff = Timestamp.fromMillis(Date.now() - EXPIRY_HOURS * 3600 * 1000);
+    const stale = await db.collection("orders")
+      .where("status", "==", "pending")
+      .where("createdAt", "<=", cutoff)
+      .limit(ESCALATOR_BATCH_LIMIT)
+      .get();
+
+    if (stale.empty) return;
+
+    let expired = 0;
+    for (const doc of stale.docs) {
+      try {
+        // Re-check inside a transaction: a rider may have accepted between the
+        // query above and this write, and a blind set() would cancel an order
+        // that is already assigned.
+        const didExpire = await db.runTransaction(async (tx) => {
+          const snap = await tx.get(doc.ref);
+          const order = snap.data();
+          if (!order || order.status !== "pending" || order.deliveryBoyId) return false;
+          tx.update(doc.ref, {
+            status: "cancelled",
+            cancelReason: "auto_expired",
+            cancelledBy: "system",
+            updatedAt: Timestamp.now(),
+          });
+          return true;
+        });
+        if (didExpire) expired++;
+      } catch (e) {
+        console.error(`[EXPIRE_FAILED] order ${doc.id}:`, e);
+      }
+    }
+
+    if (expired > 0) {
+      console.log(`[EXPIRE_STALE] Cancelled ${expired} stale pending orders.`);
+    }
+  }
+);
+
+/**
+ * Permanently deletes the authenticated user's account and scrubs PII from
+ * Firestore. Required by Google Play policy and DPDP Act 2023.
+ * Retains order documents intact for tax/accounting requirements.
+ */
+export const deleteAccount = onCall(
+  { region: REGION, enforceAppCheck: process.env.FUNCTIONS_EMULATOR !== "true" },
+  async (request) => {
+    const uid = request.auth?.uid;
+    if (!uid) {
+      throw new HttpsError("unauthenticated", "Sign in to delete your account.");
+    }
+    checkRateLimit(uid, "deleteAccount");
+
+    // Rider and admin logins are provisioned and removed by an administrator.
+    // Letting one delete its own auth user would strand its deliveryBoys /
+    // admins doc and any orders it is carrying.
+    if (request.auth?.token?.delivery === true || request.auth?.token?.admin === true) {
+      throw new HttpsError(
+        "permission-denied",
+        "Rider and admin accounts are removed by an administrator."
+      );
+    }
+
+    // An in-flight order still needs its address, phone and OTP to be delivered.
+    const activeSnap = await db.collection("orders")
+      .where("customerId", "==", uid)
+      .where("status", "in", ACTIVE_ORDER_STATUSES)
+      .limit(1)
+      .get();
+    if (!activeSnap.empty) {
+      throw new HttpsError(
+        "failed-precondition",
+        "You have an order in progress. Delete your account after it is delivered or cancelled."
+      );
+    }
+
+    const userRef = db.collection("users").doc(uid);
+    const userSnap = await userRef.get();
+
+    // Scrub the identifying fields from the customer's orders. Amounts, items
+    // and dates stay for tax/accounting; name, phone, address, notes and the
+    // map pin — which identify a person — do not.
+    const ordersSnap = await db.collection("orders").where("customerId", "==", uid).get();
+    for (let i = 0; i < ordersSnap.docs.length; i += 400) {
+      const batch = db.batch();
+      for (const orderDoc of ordersSnap.docs.slice(i, i + 400)) {
+        batch.update(orderDoc.ref, {
+          customerName: "Deleted User",
+          customerPhone: "",
+          deliveryAddress: "",
+          deliveryInstructions: null,
+          latitude: null,
+          longitude: null,
+          customerAnonymized: true,
+        });
+      }
+      await batch.commit();
+    }
+
+    // Support conversations are free text full of personal details — delete
+    // them outright (ticket + messages).
+    const ticketsSnap = await db.collection("supportTickets").where("customerId", "==", uid).get();
+    for (const ticketDoc of ticketsSnap.docs) {
+      await db.recursiveDelete(ticketDoc.ref);
+    }
+
+    await db.collection("orderLocks").doc(uid).delete();
+
+    if (userSnap.exists) {
+      // Anonymize the profile and drop everything else the user stored on it.
+      await userRef.set({
+        uid,
+        name: "Deleted User",
+        email: "",
+        phone: "",
+        role: "customer",
+        isActive: false,
+        isDeleted: true,
+        deletedAt: Timestamp.now(),
+        addresses: [],
+        fcmTokens: [],
+        favoriteProductIds: [],
+        cart: FieldValue.delete(),
+        avatarUrl: null,
+        village: "",
+        mandal: "",
+        district: "",
+        updatedAt: Timestamp.now(),
+      }, { merge: true });
+    }
+
+    // Delete user from Firebase Auth. Done last: every step above is
+    // idempotent, so if this fails the user can simply retry the deletion.
+    try {
+      await getAuth().deleteUser(uid);
+    } catch (e) {
+      console.error(`Failed to delete Firebase Auth user ${uid}:`, e);
+      throw new HttpsError("internal", "Failed to delete authentication user.");
+    }
+
+    return { success: true };
+  }
+);
+
 

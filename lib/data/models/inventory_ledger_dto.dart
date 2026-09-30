@@ -5,7 +5,8 @@ class InventoryLedgerDto extends InventoryLedger {
   InventoryLedgerDto({
     required super.id,
     required super.productId,
-    required super.adminId,
+    required super.actorId,
+    super.actorType,
     super.orderId,
     required super.changeType,
     required super.physicalDelta,
@@ -18,11 +19,12 @@ class InventoryLedgerDto extends InventoryLedger {
     return InventoryLedgerDto(
       id: documentId,
       productId: map['productId'] ?? '',
-      adminId: map['adminId'] ?? '',
+      actorId: map['actorId'] ?? map['adminId'] ?? '',
+      actorType: map['actorType'] ?? InventoryLedger.kActorAdmin,
       orderId: map['orderId'],
-      changeType: map['changeType'] ?? 'adjustment',
-      physicalDelta: map['physicalDelta'] ?? 0,
-      reservedDelta: map['reservedDelta'] ?? 0,
+      changeType: map['changeType'] ?? InventoryLedger.kCorrection,
+      physicalDelta: (map['physicalDelta'] as num?)?.toInt() ?? 0,
+      reservedDelta: (map['reservedDelta'] as num?)?.toInt() ?? 0,
       notes: map['notes'] ?? '',
       timestamp: map['timestamp'] != null
           ? (map['timestamp'] as Timestamp).toDate()
@@ -33,7 +35,8 @@ class InventoryLedgerDto extends InventoryLedger {
   Map<String, dynamic> toMap() {
     return {
       'productId': productId,
-      'adminId': adminId,
+      'actorId': actorId,
+      'actorType': actorType,
       if (orderId != null) 'orderId': orderId,
       'changeType': changeType,
       'physicalDelta': physicalDelta,

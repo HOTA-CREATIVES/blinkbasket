@@ -39,6 +39,14 @@ class AppTokens {
   static const double s20 = 20;
   static const double s24 = 24;
   static const double s32 = 32;
+  static const double s40 = 40;
+  static const double s48 = 48;
+
+  // ---- Semantic colors ----
+  static const Color success = Color(0xFF16A34A);
+  static const Color warning = Color(0xFFF59E0B);
+  static const Color error = Color(0xFFDC2626);
+  static const Color info = Color(0xFF3B82F6);
 
   // ---- Corner radius ----
   static const double rSm = 8;
@@ -50,6 +58,22 @@ class AppTokens {
   // ---- Motion ----
   static const Duration fast = Duration(milliseconds: 150);
   static const Duration normal = Duration(milliseconds: 250);
+
+  // ---- Elevation (shared shadow language for cards/banners/nav bars) ----
+  /// Subtle lift — list rows, chips, nav bars resting on a surface.
+  static List<BoxShadow> shadowSm(Color tint) => [
+        BoxShadow(color: tint.withValues(alpha: 0.08), blurRadius: 8, offset: const Offset(0, 2)),
+      ];
+
+  /// Pronounced lift — floating action bars, hero cards, bottom sheets peeking above content.
+  static List<BoxShadow> shadowMd(Color tint) => [
+        BoxShadow(color: tint.withValues(alpha: 0.14), blurRadius: 16, offset: const Offset(0, 6)),
+      ];
+
+  /// High lift — modals, floating checkout bar, dialogs.
+  static List<BoxShadow> shadowLg(Color tint) => [
+        BoxShadow(color: tint.withValues(alpha: 0.18), blurRadius: 24, offset: const Offset(0, 10)),
+      ];
 
   /// Color for an order status string used across customer/admin/rider views.
   static Color statusColor(String status) {
@@ -68,6 +92,26 @@ class AppTokens {
         return statusCancelled;
       default:
         return statusAssigned;
+    }
+  }
+
+  /// Accessible icon for an order status (satisfies non-color-only cues).
+  static IconData statusIcon(String status) {
+    switch (status) {
+      case 'pending':
+        return Icons.hourglass_top_rounded;
+      case 'assigned':
+        return Icons.person_pin_circle_rounded;
+      case 'picked_up':
+        return Icons.inventory_2_rounded;
+      case 'out_for_delivery':
+        return Icons.delivery_dining_rounded;
+      case 'delivered':
+        return Icons.check_circle_rounded;
+      case 'cancelled':
+        return Icons.cancel_rounded;
+      default:
+        return Icons.info_outline_rounded;
     }
   }
 

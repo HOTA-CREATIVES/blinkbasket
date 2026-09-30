@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:cloud_firestore/cloud_firestore.dart' hide Order;
 import 'package:cloud_functions/cloud_functions.dart';
 import '../../domain/entities/order.dart';
@@ -8,7 +9,7 @@ import '../models/order_dto.dart';
 class FirebaseOrderRepository implements OrderRepository {
   final FirebaseFirestore _db = FirebaseFirestore.instance;
   // Functions are deployed to Mumbai (asia-south1), closest to the service area.
-  final FirebaseFunctions _functions =
+  FirebaseFunctions get _functions =>
       FirebaseFunctions.instanceFor(region: 'asia-south1');
 
   @override
@@ -27,6 +28,9 @@ class FirebaseOrderRepository implements OrderRepository {
         .collection('orders')
         .where('customerId', isEqualTo: customerId)
         .orderBy('createdAt', descending: true)
+        // Most recent 100: history used to load (and re-download on every
+        // change) every order the customer ever placed.
+        .limit(100)
         .snapshots()
         .map((snapshot) => snapshot.docs
             .map((doc) => OrderDto.fromMap(doc.data(), doc.id))
@@ -39,6 +43,9 @@ class FirebaseOrderRepository implements OrderRepository {
         .collection('orders')
         .where('deliveryBoyId', isEqualTo: deliveryBoyId)
         .orderBy('createdAt', descending: true)
+        // Most recent 200 — bounds the task list and the earnings screen that
+        // sums it, instead of growing with every delivery the rider ever did.
+        .limit(200)
         .snapshots()
         .map((snapshot) => snapshot.docs
             .map((doc) => OrderDto.fromMap(doc.data(), doc.id))
@@ -63,6 +70,7 @@ class FirebaseOrderRepository implements OrderRepository {
         .collection('orders')
         .where('status', isEqualTo: 'pending')
         .where('deliveryBoyId', isEqualTo: null)
+        .orderBy('createdAt', descending: true)
         .limit(limit)
         .snapshots()
         .map((snapshot) => snapshot.docs
@@ -73,7 +81,7 @@ class FirebaseOrderRepository implements OrderRepository {
   @override
   Stream<List<UserModel>> streamAllDeliveryBoys({int limit = 200}) {
     return _db
-        .collection('deliveryPartners')
+        .collection('deliveryBoys')
         .limit(limit)
         .snapshots()
         .map((snapshot) => snapshot.docs
@@ -87,6 +95,7 @@ class FirebaseOrderRepository implements OrderRepository {
   Future<PlaceOrderResult> placeOrder({
     required List<OrderItem> items,
     required String deliveryAddress,
+    String? deliveryInstructions,
     double? latitude,
     double? longitude,
   }) async {
@@ -100,6 +109,8 @@ class FirebaseOrderRepository implements OrderRepository {
                 })
             .toList(),
         'deliveryAddress': deliveryAddress,
+        if (deliveryInstructions != null && deliveryInstructions.isNotEmpty)
+          'deliveryInstructions': deliveryInstructions,
         if (latitude != null) 'latitude': latitude,
         if (longitude != null) 'longitude': longitude,
       });
@@ -114,6 +125,22 @@ class FirebaseOrderRepository implements OrderRepository {
     } catch (_) {
       return PlaceOrderResult.failure(
           'Failed to place order. Check your connection and try again.');
+    }
+  }
+
+  @override
+  Future<String?> cancelOrder(String orderId, {String? reason}) async {
+    try {
+      final callable = _functions.httpsCallable('cancelOrder');
+      await callable.call<dynamic>({
+        'orderId': orderId,
+        if (reason != null && reason.isNotEmpty) 'reason': reason,
+      });
+      return null;
+    } on FirebaseFunctionsException catch (e) {
+      return e.message ?? 'Failed to cancel order (${e.code}). Please try again.';
+    } catch (e) {
+      return 'Failed to cancel order ($e). Check your connection and try again.';
     }
   }
 
@@ -175,8 +202,16 @@ class FirebaseOrderRepository implements OrderRepository {
   Future<String?> acceptOrder(String orderId) async {
     try {
       final callable = _functions.httpsCallable('acceptOrder');
-      await callable.call<dynamic>({'orderId': orderId});
+      // The plugin's default callable timeout is long enough that a stuck
+      // connection (e.g. Functions emulator not running, dead network) reads
+      // as an infinite spinner to the rider. Bound it explicitly so the
+      // caller always gets a result to reset its loading state on.
+      await callable
+          .call<dynamic>({'orderId': orderId})
+          .timeout(const Duration(seconds: 20));
       return null;
+    } on TimeoutException {
+      return 'Request timed out. Check your connection and try again.';
     } on FirebaseFunctionsException catch (e) {
       return e.message ?? 'Failed to accept — it may already be taken.';
     } catch (_) {
@@ -185,9 +220,95 @@ class FirebaseOrderRepository implements OrderRepository {
   }
 
   @override
+  Future<String?> reportDeliveryFailure(String orderId, String reason) async {
+    try {
+      final callable = _functions.httpsCallable('reportDeliveryFailure');
+      await callable
+          .call<dynamic>({'orderId': orderId, 'reason': reason})
+          .timeout(const Duration(seconds: 20));
+      return null;
+    } on TimeoutException {
+      return 'Request timed out. Check your connection and try again.';
+    } on FirebaseFunctionsException catch (e) {
+      return e.message ?? 'Failed to report this order as undelivered.';
+    } catch (_) {
+      return 'Failed to report this order as undelivered. Check your connection and try again.';
+    }
+  }
+
+  @override
+  Future<String?> adminCancelOrder(String orderId, String adminId, String reason) async {
+    try {
+      final ref = _db.collection('orders').doc(orderId);
+      return await _db.runTransaction<String?>((tx) async {
+        final snap = await tx.get(ref);
+        if (!snap.exists) return 'Order not found.';
+        final status = snap.data()?['status'];
+        if (status == 'delivered' || status == 'cancelled') {
+          return 'This order is already closed.';
+        }
+        tx.update(ref, {
+          'status': 'cancelled',
+          'cancelReason': reason,
+          'cancelledBy': 'admin',
+          'cancelledById': adminId,
+          'updatedAt': FieldValue.serverTimestamp(),
+        });
+        return null;
+      });
+    } catch (_) {
+      return 'Failed to cancel the order. Check your connection and try again.';
+    }
+  }
+
+  @override
+  Future<String?> adminUnassignOrder(String orderId) async {
+    try {
+      final ref = _db.collection('orders').doc(orderId);
+      return await _db.runTransaction<String?>((tx) async {
+        final snap = await tx.get(ref);
+        if (!snap.exists) return 'Order not found.';
+        final data = snap.data() ?? {};
+        const unassignable = ['assigned', 'picked_up', 'out_for_delivery'];
+        if (!unassignable.contains(data['status'])) {
+          return 'Only an order that a rider is holding can be unassigned.';
+        }
+        tx.update(ref, {
+          'status': 'pending',
+          'deliveryBoyId': null,
+          'deliveryBoyName': null,
+          'deliveryBoyPhone': null,
+          'unassignedFrom': data['deliveryBoyId'],
+          'updatedAt': FieldValue.serverTimestamp(),
+        });
+        return null;
+      });
+    } catch (_) {
+      return 'Failed to unassign the order. Check your connection and try again.';
+    }
+  }
+
+  @override
+  Future<String?> resetOtpAttempts(String orderId) async {
+    try {
+      await _functions
+          .httpsCallable('resetOtpAttempts')
+          .call<dynamic>({'orderId': orderId})
+          .timeout(const Duration(seconds: 20));
+      return null;
+    } on TimeoutException {
+      return 'Request timed out. Check your connection and try again.';
+    } on FirebaseFunctionsException catch (e) {
+      return e.message ?? 'Failed to reset OTP attempts.';
+    } catch (_) {
+      return 'Failed to reset OTP attempts. Check your connection and try again.';
+    }
+  }
+
+  @override
   Future<void> updateDeliveryBoyActiveStatus(String riderId, bool isActive) async {
     try {
-      await _db.collection('deliveryPartners').doc(riderId).set({
+      await _db.collection('deliveryBoys').doc(riderId).set({
         'isActive': isActive,
       }, SetOptions(merge: true));
     } catch (e) {
@@ -198,7 +319,9 @@ class FirebaseOrderRepository implements OrderRepository {
   @override
   Future<void> updateDeliveryBoyDutyStatus(String riderId, bool onDuty) async {
     try {
-      await _db.collection('deliveryPartners').doc(riderId).set({
+      // `deliveryBoys` is the rules-protected collection; `deliveryPartners`
+      // has no rule match and is implicitly write-locked by the catch-all.
+      await _db.collection('deliveryBoys').doc(riderId).set({
         'onDuty': onDuty,
       }, SetOptions(merge: true));
     } catch (e) {
@@ -237,11 +360,11 @@ class FirebaseOrderRepository implements OrderRepository {
     String? licenseNo,
   }) async {
     try {
-      await _db.collection('deliveryPartners').doc(docId).set({
+      await _db.collection('deliveryBoys').doc(docId).set({
         'name': name,
         'email': email,
         'phone': phone,
-        'currentVillage': village,
+        'village': village,
         'vehicleNo': vehicleNo ?? '',
         'licenseNo': licenseNo ?? '',
         'updatedAt': FieldValue.serverTimestamp(),
@@ -254,7 +377,7 @@ class FirebaseOrderRepository implements OrderRepository {
   @override
   Future<void> deleteDeliveryBoy(String docId) async {
     try {
-      await _db.collection('deliveryPartners').doc(docId).set({
+      await _db.collection('deliveryBoys').doc(docId).set({
         'isActive': false,
         'isDeleted': true,
         'deletedAt': FieldValue.serverTimestamp(),

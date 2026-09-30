@@ -40,7 +40,7 @@ class _AddRiderScreenState extends State<AddRiderScreen> {
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
         content: Text(message),
-        backgroundColor: isError ? Colors.red.shade700 : Colors.green.shade700,
+        backgroundColor: isError ? Theme.of(context).colorScheme.error : AppTokens.statusDelivered,
         behavior: SnackBarBehavior.floating,
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(AppTokens.rMd)),
       ),
@@ -198,14 +198,14 @@ class _AddRiderScreenState extends State<AddRiderScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: Colors.grey.shade50,
+      backgroundColor: Theme.of(context).colorScheme.surfaceContainerLow,
       appBar: AppBar(
         title: const Text(
           'Register Delivery Partner',
           style: TextStyle(fontWeight: FontWeight.bold, fontSize: 18),
         ),
-        backgroundColor: Colors.white,
-        foregroundColor: Colors.black87,
+        backgroundColor: Theme.of(context).colorScheme.surface,
+        foregroundColor: Theme.of(context).colorScheme.onSurface,
         elevation: 0,
         leading: IconButton(
           icon: const Icon(Icons.arrow_back_ios_new_rounded, size: 20),
@@ -218,26 +218,32 @@ class _AddRiderScreenState extends State<AddRiderScreen> {
           children: [
             // Top Progressive Step Indicator
             Container(
-              color: Colors.white,
+              color: Theme.of(context).colorScheme.surface,
               padding: const EdgeInsets.symmetric(vertical: 16.0, horizontal: 24.0),
               child: Row(
                 children: [
-                  _buildStepIndicator(
-                    index: 0,
-                    title: 'Profile Info',
-                    icon: Icons.person_outline_rounded,
+                  Flexible(
+                    flex: 3,
+                    child: _buildStepIndicator(
+                      index: 0,
+                      title: 'Profile Info',
+                      icon: Icons.person_outline_rounded,
+                    ),
                   ),
                   Expanded(
                     child: Container(
-                      height: 2,
-                      margin: const EdgeInsets.symmetric(horizontal: 12),
-                      color: _activeStep > 0 ? AppTokens.primary : Colors.grey.shade200,
+                    height: 2,
+                    margin: const EdgeInsets.symmetric(horizontal: 12),
+                    color: _activeStep > 0 ? AppTokens.primary : Theme.of(context).colorScheme.outlineVariant,
                     ),
                   ),
-                  _buildStepIndicator(
-                    index: 1,
-                    title: 'Region & Vehicle',
-                    icon: Icons.directions_bike_rounded,
+                  Flexible(
+                    flex: 4,
+                    child: _buildStepIndicator(
+                      index: 1,
+                      title: 'Region & Vehicle',
+                      icon: Icons.directions_bike_rounded,
+                    ),
                   ),
                 ],
               ),
@@ -259,7 +265,7 @@ class _AddRiderScreenState extends State<AddRiderScreen> {
             Container(
               padding: const EdgeInsets.all(24.0),
               decoration: BoxDecoration(
-                color: Colors.white,
+                color: Theme.of(context).colorScheme.surface,
                 boxShadow: [
                   BoxShadow(
                     color: Colors.black.withValues(alpha: 0.03),
@@ -278,11 +284,11 @@ class _AddRiderScreenState extends State<AddRiderScreen> {
                       style: OutlinedButton.styleFrom(
                         padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 16),
                         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(AppTokens.rMd)),
-                        side: BorderSide(color: Colors.grey.shade300),
+                        side: BorderSide(color: Theme.of(context).colorScheme.outlineVariant),
                       ),
-                      child: const Text(
+                      child: Text(
                         'BACK',
-                        style: TextStyle(fontWeight: FontWeight.bold, color: Colors.black54),
+                        style: TextStyle(fontWeight: FontWeight.bold, color: Theme.of(context).colorScheme.onSurfaceVariant),
                       ),
                     ),
                     const SizedBox(width: 12),
@@ -308,10 +314,10 @@ class _AddRiderScreenState extends State<AddRiderScreen> {
                         elevation: 0,
                       ),
                       child: _isSubmitting
-                          ? const SizedBox(
+                          ? SizedBox(
                               height: 20,
                               width: 20,
-                              child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2),
+                              child: CircularProgressIndicator(color: Theme.of(context).colorScheme.onPrimary, strokeWidth: 2),
                             )
                           : Text(
                               _activeStep == 0 ? 'CONTINUE' : 'WHITELIST PARTNER',
@@ -340,24 +346,28 @@ class _AddRiderScreenState extends State<AddRiderScreen> {
               ? AppTokens.primary
               : isActive
                   ? AppTokens.primary.withValues(alpha: 0.15)
-                  : Colors.grey.shade100,
+                  : Theme.of(context).colorScheme.surfaceContainerLow,
           child: Icon(
             isDone ? Icons.check : icon,
             size: 18,
             color: isDone
-                ? Colors.white
+                ? Theme.of(context).colorScheme.onPrimary
                 : isActive
                     ? AppTokens.primary
-                    : Colors.grey.shade400,
+                    : Theme.of(context).colorScheme.onSurfaceVariant,
           ),
         ),
         const SizedBox(width: 8),
-        Text(
-          title,
-          style: TextStyle(
-            fontSize: 13,
-            fontWeight: isActive || isDone ? FontWeight.bold : FontWeight.w500,
-            color: isActive || isDone ? Colors.black87 : Colors.grey.shade500,
+        Flexible(
+          child: Text(
+            title,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: TextStyle(
+              fontSize: 13,
+              fontWeight: isActive || isDone ? FontWeight.bold : FontWeight.w500,
+              color: isActive || isDone ? Theme.of(context).colorScheme.onSurface : Theme.of(context).colorScheme.onSurfaceVariant,
+            ),
           ),
         ),
       ],
@@ -508,12 +518,12 @@ class _AddRiderScreenState extends State<AddRiderScreen> {
       children: [
         Text(
           title,
-          style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Colors.black87),
+          style: Theme.of(context).textTheme.titleLarge?.copyWith(color: Theme.of(context).colorScheme.onSurface),
         ),
         const SizedBox(height: 4),
         Text(
           subtitle,
-          style: TextStyle(fontSize: 13, color: Colors.grey.shade600, height: 1.3),
+          style: TextStyle(fontSize: 13, color: Theme.of(context).colorScheme.onSurfaceVariant, height: 1.3),
         ),
       ],
     );
@@ -532,7 +542,7 @@ class _AddRiderScreenState extends State<AddRiderScreen> {
   }) {
     return Container(
       decoration: BoxDecoration(
-        color: Colors.white,
+        color: Theme.of(context).colorScheme.surface,
         borderRadius: BorderRadius.circular(AppTokens.rMd),
         boxShadow: [
           BoxShadow(
@@ -552,22 +562,22 @@ class _AddRiderScreenState extends State<AddRiderScreen> {
           hintText: hint,
           helperText: helperText,
           helperMaxLines: 2,
-          prefixIcon: Icon(icon, color: Colors.grey.shade400),
+          prefixIcon: Icon(icon, color: Theme.of(context).colorScheme.onSurfaceVariant),
           prefixText: prefixText,
           border: OutlineInputBorder(
             borderRadius: BorderRadius.circular(AppTokens.rMd),
-            borderSide: BorderSide(color: Colors.grey.shade200),
+            borderSide: BorderSide(color: Theme.of(context).colorScheme.outlineVariant),
           ),
           enabledBorder: OutlineInputBorder(
             borderRadius: BorderRadius.circular(AppTokens.rMd),
-            borderSide: BorderSide(color: Colors.grey.shade200),
+            borderSide: BorderSide(color: Theme.of(context).colorScheme.outlineVariant),
           ),
           focusedBorder: OutlineInputBorder(
             borderRadius: BorderRadius.circular(AppTokens.rMd),
-            borderSide: const BorderSide(color: AppTokens.primary, width: 1.5),
+            borderSide: BorderSide(color: AppTokens.primary, width: 1.5),
           ),
           filled: true,
-          fillColor: Colors.white,
+          fillColor: Theme.of(context).colorScheme.surface,
           contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
         ),
         validator: validator,

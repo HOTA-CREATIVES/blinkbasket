@@ -151,6 +151,32 @@ describe("onOrderWritten — new order broadcast (Blinkit-style auto-assignment)
     expect(orderSnap.data()?.notifiedAt).toBeDefined();
   });
 
+  it("matches the rider's village ignoring case and surrounding whitespace", async () => {
+    await db.collection("deliveryBoys").doc("localRider").set({
+      isActive: true,
+      onDuty: true,
+      village: "  bhimavaram ",
+      fcmTokens: ["local-token"],
+    });
+    await db.collection("deliveryBoys").doc("otherVillageRider").set({
+      isActive: true,
+      onDuty: true,
+      village: "Mentada",
+      fcmTokens: ["other-token"],
+    });
+
+    await fireOrderWritten("order1", undefined, {
+      status: "pending",
+      customerName: "Test Customer",
+      village: "Bhimavaram",
+      totalAmount: 100,
+    });
+
+    expect(sendEachForMulticast.mock.calls[0][0].tokens).toEqual(["local-token"]);
+    const orderSnap = await db.collection("orders").doc("order1").get();
+    expect(orderSnap.data()?.notifyTier).toBe(1);
+  });
+
   it("falls through to tier 2 immediately when no on-duty rider matches the village", async () => {
     await db.collection("deliveryBoys").doc("elsewhereRider").set({
       isActive: true,

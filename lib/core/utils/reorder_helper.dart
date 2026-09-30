@@ -1,5 +1,5 @@
 import '../../domain/entities/order.dart';
-import '../../domain/repositories/product_repository.dart';
+import '../../domain/entities/product.dart';
 import '../providers/cart_provider.dart';
 
 /// Result of a reorder attempt: how many line items were added to the
@@ -18,14 +18,14 @@ class ReorderHelper {
   /// skipped rather than failing the whole reorder.
   static Future<ReorderOutcome> reorderOrderItems(
     List<OrderItem> items,
-    ProductRepository productRepo,
+    Future<Product?> Function(String productId) getProduct,
     CartProvider cart,
   ) async {
     var added = 0;
     var skipped = 0;
 
     for (final item in items) {
-      final product = await productRepo.getProductById(item.productId);
+      final product = await getProduct(item.productId);
       if (product == null || product.stock <= 0) {
         skipped++;
         continue;

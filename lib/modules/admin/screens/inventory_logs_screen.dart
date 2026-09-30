@@ -13,14 +13,18 @@ class InventoryLogsScreen extends StatelessWidget {
 
   IconData _iconForChangeType(String type) {
     switch (type) {
+      case 'restock':
+        return Icons.add_business_rounded;
+      case 'sale':
+        return Icons.shopping_bag_outlined;
+      case 'return':
+        return Icons.undo_rounded;
       case 'reserve':
         return Icons.lock_outline_rounded;
-      case 'release':
-        return Icons.lock_open_rounded;
-      case 'cancel_release':
-        return Icons.undo_rounded;
-      case 'stock_update':
-        return Icons.edit_outlined;
+      case 'spoilage':
+        return Icons.delete_outline;
+      case 'correction':
+        return Icons.tune;
       default:
         return Icons.history_rounded;
     }
@@ -28,14 +32,18 @@ class InventoryLogsScreen extends StatelessWidget {
 
   Color _colorForChangeType(String type) {
     switch (type) {
-      case 'reserve':
-        return AppTokens.statusPending;
-      case 'release':
+      case 'restock':
         return AppTokens.statusDelivered;
-      case 'cancel_release':
+      case 'sale':
         return AppTokens.statusAssigned;
-      case 'stock_update':
+      case 'return':
+        return AppTokens.statusPending;
+      case 'reserve':
         return AppTokens.statusPickedUp;
+      case 'spoilage':
+        return AppTokens.statusCancelled;
+      case 'correction':
+        return AppTokens.statusPending;
       default:
         return AppTokens.statusPending;
     }

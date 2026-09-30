@@ -33,6 +33,12 @@
   <link rel="manifest" href="manifest.json">
 </head>
 <body>
+  <!-- Firebase JS SDK — loaded as static scripts to avoid dynamic-import
+       failures from gstatic.com in strict/offline browser environments.
+       These versions must stay in sync with the firebase_core pub package. -->
+  <script type="module">
+    import { initializeApp } from 'https://www.gstatic.com/firebasejs/11.9.1/firebase-app.js';
+  </script>
   <script src="flutter_bootstrap.js" async></script>
 </body>
 </html>

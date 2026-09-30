@@ -5,8 +5,12 @@ abstract class AuthRepository {
   Stream<User?> get authStateChanges;
   User? get currentUser;
   Future<AuthResult> signInWithEmail(String email, String password);
-  Future<AuthResult> registerWithEmail(String email, String password);
+  /// Creates the Firebase Auth account AND a matching Firestore customer
+  /// stub in one shot, so a user that closes the app mid-onboarding doesn't
+  /// leave an orphan Auth account. Returns the fresh [User] on success.
+  Future<AuthResult> registerCustomer(String email, String password);
   Future<AuthResult> signInWithGoogle();
+  Future<bool> sendPasswordReset(String email);
   Future<void> signOut();
   Future<bool> setupCustomerProfile(UserModel userModel);
   Future<bool> updateUserProfile(UserModel userModel);
@@ -18,7 +22,15 @@ abstract class AuthRepository {
   /// Fetches the profile for a *known* role — used by [reloadUserProfile] and
   /// address-management flows after the role has already been established.
   Future<UserModel?> getUserProfile(String uid, String role);
-  Future<void> saveDeliveryBoyUid(String docId, String uid);
+  /// Re-resolves the live role + isActive state from Firestore. Used by
+  /// [reloadUserProfile] and by the auth listener when a token refreshes,
+  /// so an admin deactivating a rider mid-session doesn't leave a stale
+  /// privileged [UserModel] in the provider.
+  Future<UserModel?> refreshUserProfile(String uid, String role);
+  /// Deletes the signed-in account. Returns null on success, or a message
+  /// written for the user explaining why it couldn't be done (for example an
+  /// order is still in progress).
+  Future<String?> deleteAccount();
 }
 
 class AuthResult {

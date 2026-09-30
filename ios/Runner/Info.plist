@@ -49,6 +49,14 @@
 	<string>This app needs access to location when open to auto-detect your delivery address.</string>
 	<key>NSLocationAlwaysAndWhenInUseUsageDescription</key>
 	<string>This app needs access to location to auto-detect your delivery address.</string>
+	<key>NSCameraUsageDescription</key>
+	<string>JC Mart requires camera access to allow uploading profile photos and documents.</string>
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>JC Mart requires access to your photo library to select photos for upload.</string>
+	<key>NSFaceIDUsageDescription</key>
+	<string>JC Mart uses Face ID / Touch ID for fast and secure login verification.</string>
+	<key>ITSAppUsesNonExemptEncryption</key>
+	<false/>
 	<!-- Push notifications (order status updates). Requires GoogleService-Info.plist
 	     (not yet added to ios/Runner/) and an APNs key uploaded to the Firebase
 	     console before this actually delivers pushes on a device. -->

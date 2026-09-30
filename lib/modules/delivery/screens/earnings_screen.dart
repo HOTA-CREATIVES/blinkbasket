@@ -21,6 +21,7 @@ class EarningsScreen extends StatelessWidget {
     final orderProvider = Provider.of<OrderProvider>(context, listen: false);
     final configProvider = Provider.of<ConfigProvider>(context, listen: false);
     final user = authProvider.currentUserModel;
+    final scheme = Theme.of(context).colorScheme;
 
     if (user == null) {
       return const Scaffold(
@@ -32,7 +33,7 @@ class EarningsScreen extends StatelessWidget {
       stream: configProvider.streamAppConfig(),
       builder: (context, configSnapshot) {
         final payoutPerDelivery = configSnapshot.data?.riderPayoutPerDelivery ?? 30.0;
-        return _buildScaffold(context, orderProvider, user.uid, payoutPerDelivery);
+        return _buildScaffold(context, orderProvider, user.uid, payoutPerDelivery, scheme);
       },
     );
   }
@@ -42,16 +43,17 @@ class EarningsScreen extends StatelessWidget {
     OrderProvider orderProvider,
     String uid,
     double payoutPerDelivery,
+    ColorScheme scheme,
   ) {
     return Scaffold(
-      backgroundColor: Colors.grey.shade50,
+      backgroundColor: scheme.surfaceContainerHighest,
       appBar: AppBar(
-        title: const Text(
+        title: Text(
           'Earnings & Remittances',
-          style: TextStyle(fontWeight: FontWeight.bold, fontSize: 18),
+          style: Theme.of(context).textTheme.titleLarge,
         ),
-        backgroundColor: Colors.white,
-        foregroundColor: Colors.black87,
+        backgroundColor: scheme.surface,
+        foregroundColor: scheme.onSurface,
         elevation: 0.5,
         automaticallyImplyLeading: !isEmbedded,
         leading: isEmbedded
@@ -64,26 +66,40 @@ class EarningsScreen extends StatelessWidget {
       body: StreamBuilder<List<Order>>(
         stream: orderProvider.streamDeliveryBoyOrders(uid),
         builder: (context, snapshot) {
-          if (snapshot.connectionState == ConnectionState.waiting) {
-            return const Center(child: CircularProgressIndicator(color: Colors.green));
+          if (snapshot.connectionState == ConnectionState.waiting && !snapshot.hasData) {
+            return Center(child: CircularProgressIndicator(color: scheme.primary));
+          }
+          if (snapshot.hasError) {
+            return Center(
+              child: Padding(
+                padding: const EdgeInsets.all(AppTokens.s20),
+                child: Text(
+                  'Error loading earnings data:\n${snapshot.error}',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(color: Theme.of(context).colorScheme.error),
+                ),
+              ),
+            );
           }
 
           final orders = snapshot.data ?? [];
           final completed = orders.where((o) => o.status == 'delivered').toList();
           final cancelled = orders.where((o) => o.status == 'cancelled').toList();
 
-          // Calculate financials — payout rate is admin-configurable (Store
-          // Settings), applied forward-looking to all completed runs shown.
+          // Each delivery is paid at the rate frozen on the order when it was
+          // delivered. The current Store Settings rate is only the fallback for
+          // deliveries that predate that field — so an admin editing the rate
+          // never reprices a rider's history.
           double totalCodCollected = 0.0;
           double riderEarnings = 0.0;
 
           for (var o in completed) {
             totalCodCollected += o.totalAmount;
-            riderEarnings += payoutPerDelivery;
+            riderEarnings += o.riderPayout ?? payoutPerDelivery;
           }
 
           return SingleChildScrollView(
-            padding: EdgeInsets.fromLTRB(16.0, 16.0, 16.0, isEmbedded ? 100.0 : 16.0),
+            padding: EdgeInsets.fromLTRB(AppTokens.s16, AppTokens.s16, AppTokens.s16, isEmbedded ? 100.0 : AppTokens.s16.toDouble()),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
@@ -95,68 +111,68 @@ class EarningsScreen extends StatelessWidget {
                         elevation: 0,
                         shape: RoundedRectangleBorder(
                           borderRadius: BorderRadius.circular(AppTokens.rMd),
-                          side: BorderSide(color: Colors.green.shade200),
-                        ),
-                        color: Colors.green.shade50.withValues(alpha: 0.5),
-                        child: Padding(
-                          padding: const EdgeInsets.all(16.0),
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Text(
-                                'Total Payout',
-                                style: TextStyle(color: Colors.green.shade800, fontSize: 12, fontWeight: FontWeight.bold),
+                        side: BorderSide(color: scheme.outlineVariant),
+                      ),
+                      color: scheme.primaryContainer.withValues(alpha: 0.5),
+                      child: Padding(
+                        padding: const EdgeInsets.all(AppTokens.s16),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              'Total Payout',
+                              style: TextStyle(color: scheme.primary, fontSize: 12, fontWeight: FontWeight.bold),
+                            ),
+                            const SizedBox(height: AppTokens.s8),
+                            Text(
+                              '₹${riderEarnings.toStringAsFixed(2)}',
+                              style: TextStyle(
+                                color: scheme.primary,
+                                fontWeight: FontWeight.bold,
+                                fontSize: 20,
                               ),
-                              const SizedBox(height: 8),
-                              Text(
-                                '₹${riderEarnings.toStringAsFixed(2)}',
-                                style: TextStyle(
-                                  color: Colors.green.shade800,
-                                  fontWeight: FontWeight.bold,
-                                  fontSize: 20,
-                                ),
-                              ),
-                              const SizedBox(height: 4),
-                              Text(
-                                '₹${payoutPerDelivery.toStringAsFixed(0)} per delivery run',
-                                style: const TextStyle(color: Colors.grey, fontSize: 11),
-                              ),
+                            ),
+                            const SizedBox(height: 4),
+                            Text(
+                              'Current rate ₹${payoutPerDelivery.toStringAsFixed(0)} / delivery',
+                              style: TextStyle(color: scheme.onSurfaceVariant, fontSize: 11),
+                            ),
                             ],
                           ),
                         ),
                       ),
                     ),
-                    const SizedBox(width: 12),
+                    const SizedBox(width: AppTokens.s12),
                     Expanded(
                       child: Card(
                         elevation: 0,
                         shape: RoundedRectangleBorder(
                           borderRadius: BorderRadius.circular(AppTokens.rMd),
-                          side: BorderSide(color: Colors.orange.shade200),
+                          side: BorderSide(color: scheme.outlineVariant),
                         ),
-                        color: Colors.orange.shade50.withValues(alpha: 0.5),
+                        color: scheme.primaryContainer.withValues(alpha: 0.5),
                         child: Padding(
-                          padding: const EdgeInsets.all(16.0),
+                          padding: const EdgeInsets.all(AppTokens.s16),
                           child: Column(
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
                               Text(
                                 'COD Cash Held',
-                                style: TextStyle(color: Colors.orange.shade800, fontSize: 12, fontWeight: FontWeight.bold),
+                                style: TextStyle(color: scheme.primary, fontSize: 12, fontWeight: FontWeight.bold),
                               ),
-                              const SizedBox(height: 8),
+                              const SizedBox(height: AppTokens.s8),
                               Text(
                                 '₹${totalCodCollected.toStringAsFixed(2)}',
                                 style: TextStyle(
-                                  color: Colors.orange.shade800,
+                                  color: scheme.primary,
                                   fontWeight: FontWeight.bold,
                                   fontSize: 20,
                                 ),
                               ),
                               const SizedBox(height: 4),
-                              const Text(
+                              Text(
                                 'Remit to Admin HQ',
-                                style: TextStyle(color: Colors.grey, fontSize: 11),
+                                style: TextStyle(color: scheme.onSurfaceVariant, fontSize: 11),
                               ),
                             ],
                           ),
@@ -165,18 +181,18 @@ class EarningsScreen extends StatelessWidget {
                     ),
                   ],
                 ),
-                const SizedBox(height: 16),
+                const SizedBox(height: AppTokens.s16),
 
                 // Statistics Grid Card
                 Card(
                   elevation: 0,
                   shape: RoundedRectangleBorder(
                     borderRadius: BorderRadius.circular(AppTokens.rMd),
-                    side: BorderSide(color: Colors.grey.shade200),
+                    side: BorderSide(color: scheme.outlineVariant),
                   ),
-                  color: Colors.white,
+                  color: scheme.surface,
                   child: Padding(
-                    padding: const EdgeInsets.all(16.0),
+                    padding: const EdgeInsets.all(AppTokens.s16),
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
@@ -188,65 +204,65 @@ class EarningsScreen extends StatelessWidget {
                         Row(
                           mainAxisAlignment: MainAxisAlignment.spaceAround,
                           children: [
-                            _buildStatItem('Completed', '${completed.length} runs', Colors.green),
-                            _buildStatItem('Cancelled', '${cancelled.length} runs', Colors.red),
-                            _buildStatItem('Total Tasks', '${orders.length} assigned', Colors.blue),
+                            _buildStatItem('Completed', '${completed.length} runs', scheme.primary, scheme),
+                            _buildStatItem('Cancelled', '${cancelled.length} runs', scheme.error, scheme),
+                            _buildStatItem('Total Tasks', '${orders.length} assigned', scheme.primary, scheme),
                           ],
                         ),
                       ],
                     ),
                   ),
                 ),
-                const SizedBox(height: 24),
+                const SizedBox(height: AppTokens.s24),
 
                 // Runs Timeline / Completed Runs List
-                const Text(
+                Text(
                   'Recent Completed Runs Logs',
-                  style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16, color: Colors.black87),
+                  style: Theme.of(context).textTheme.titleMedium?.copyWith(color: scheme.onSurface),
                 ),
-                const SizedBox(height: 12),
+                const SizedBox(height: AppTokens.s12),
                 if (completed.isEmpty)
                   Container(
                     width: double.infinity,
                     padding: const EdgeInsets.symmetric(vertical: 40),
                     alignment: Alignment.center,
-                    child: Text(
-                      'No completed runs logged today.',
-                      style: TextStyle(color: Colors.grey.shade500, fontSize: 14),
-                    ),
+                      child: Text(
+                        'No completed runs logged today.',
+                        style: TextStyle(color: scheme.onSurfaceVariant, fontSize: 14),
+                      ),
                   )
                 else
                   ListView.separated(
                     shrinkWrap: true,
                     physics: const NeverScrollableScrollPhysics(),
                     itemCount: completed.length,
-                    separatorBuilder: (_, __) => const SizedBox(height: 12),
+                    separatorBuilder: (_, __) => const SizedBox(height: AppTokens.s12),
                     itemBuilder: (context, idx) {
                       final order = completed[idx];
                       return Card(
                         elevation: 0,
                         shape: RoundedRectangleBorder(
                           borderRadius: BorderRadius.circular(AppTokens.rMd),
-                          side: BorderSide(color: Colors.grey.shade100),
+                          side: BorderSide(color: scheme.outlineVariant),
                         ),
-                        color: Colors.white,
+                        color: scheme.surface,
                         child: ListTile(
-                          contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                          leading: const CircleAvatar(
-                            backgroundColor: Colors.green,
+                          contentPadding: const EdgeInsets.symmetric(horizontal: AppTokens.s16, vertical: AppTokens.s8),
+                          leading: CircleAvatar(
+                            backgroundColor: scheme.primary,
                             radius: 18,
-                            child: Icon(Icons.check_rounded, color: Colors.white, size: 18),
+                            child: Icon(Icons.check_rounded, color: scheme.onPrimary, size: 18),
                           ),
                           title: Row(
                             mainAxisAlignment: MainAxisAlignment.spaceBetween,
                             children: [
                               Text(
                                 'Order #${order.id.substring(0, 6).toUpperCase()}',
-                                style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14),
+                              style: Theme.of(context).textTheme.bodyMedium?.copyWith(fontWeight: FontWeight.bold),
                               ),
                               Text(
                                 '₹${order.totalAmount.toStringAsFixed(1)} (COD)',
-                                style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14, color: Colors.black87),
+                                style: Theme.of(context).textTheme.bodyMedium?.copyWith(fontWeight: FontWeight.bold, color: scheme.onSurface),
                               ),
                             ],
                           ),
@@ -254,7 +270,7 @@ class EarningsScreen extends StatelessWidget {
                             padding: const EdgeInsets.only(top: 4.0),
                             child: Text(
                               'To: ${order.customerName}  •  ${order.village}\nCompleted on: ${_formatDateTime(order.updatedAt)}',
-                              style: TextStyle(color: Colors.grey.shade600, fontSize: 12, height: 1.4),
+                              style: TextStyle(color: scheme.onSurfaceVariant, fontSize: 12, height: 1.4),
                             ),
                           ),
                         ),
@@ -269,7 +285,7 @@ class EarningsScreen extends StatelessWidget {
     );
   }
 
-  Widget _buildStatItem(String label, String value, Color color) {
+  Widget _buildStatItem(String label, String value, Color color, ColorScheme scheme) {
     return Column(
       children: [
         Text(
@@ -279,7 +295,7 @@ class EarningsScreen extends StatelessWidget {
         const SizedBox(height: 4),
         Text(
           label,
-          style: const TextStyle(color: Colors.grey, fontSize: 12),
+          style: TextStyle(color: scheme.onSurfaceVariant, fontSize: 12),
         ),
       ],
     );

@@ -7,3 +7,12 @@
 
 -keepattributes Signature
 -keepattributes *Annotation*
+
+# Google Sign-In & Firebase Auth Keep Rules
+-keep class com.google.android.gms.auth.api.signin.** { *; }
+-keep class com.google.android.gms.internal.auth.** { *; }
+-keep class com.google.firebase.** { *; }
+-keep class com.google.android.gms.common.** { *; }
+-dontwarn com.google.android.gms.**
+-dontwarn com.google.firebase.**
+

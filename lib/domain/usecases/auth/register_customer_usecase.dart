@@ -4,5 +4,6 @@ class RegisterCustomerUseCase {
   final AuthRepository repository;
   RegisterCustomerUseCase(this.repository);
 
-  Future<AuthResult> call(String email, String password) => repository.registerWithEmail(email, password);
+  Future<AuthResult> call(String email, String password) =>
+      repository.registerCustomer(email, password);
 }

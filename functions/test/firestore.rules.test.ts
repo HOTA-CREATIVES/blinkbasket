@@ -1,3 +1,6 @@
+// @ts-nocheck — a stray firebase@12 in a parent node_modules shadows the
+// firebase@10 types this file was written against (duplicate Firestore types);
+// runtime behaviour is unaffected. Remove once that duplicate is gone.
 import * as fs from "fs";
 import * as path from "path";
 import {
@@ -6,7 +9,7 @@ import {
   initializeTestEnvironment,
   RulesTestEnvironment,
 } from "@firebase/rules-unit-testing";
-import { setDoc, doc, updateDoc } from "firebase/firestore";
+import { setDoc, doc, updateDoc, getDoc } from "firebase/firestore";
 
 const PROJECT_ID = "demo-hypermart-rules";
 
@@ -117,6 +120,49 @@ describe("firestore.rules — orders", () => {
     );
   });
 
+  describe("disabled / deleted riders", () => {
+    async function seedPendingOrderAndRider(rider: Record<string, unknown> | null) {
+      await testEnv.withSecurityRulesDisabled(async (ctx) => {
+        const adminDb = ctx.firestore();
+        await setDoc(doc(adminDb, "orders/order1"), {
+          customerId: "cust1",
+          status: "pending",
+          deliveryBoyId: null,
+          totalAmount: 100,
+        });
+        if (rider) await setDoc(doc(adminDb, "deliveryBoys/rider1"), rider);
+      });
+    }
+
+    it("blocks a soft-deleted rider from reading pending orders even with a stale delivery claim", async () => {
+      await seedPendingOrderAndRider({ uid: "rider1", isActive: false, isDeleted: true });
+
+      const asRider = testEnv.authenticatedContext("rider1", { delivery: true }).firestore();
+      await assertFails(getDoc(doc(asRider, "orders/order1")));
+    });
+
+    it("blocks a disabled (isActive:false) rider even when their doc still exists", async () => {
+      await seedPendingOrderAndRider({ uid: "rider1", isActive: false });
+
+      const asRider = testEnv.authenticatedContext("rider1", {}).firestore();
+      await assertFails(getDoc(doc(asRider, "orders/order1")));
+    });
+
+    it("still lets an active rider with a doc (no claim needed) read a pending order", async () => {
+      await seedPendingOrderAndRider({ uid: "rider1", isActive: true });
+
+      const asRider = testEnv.authenticatedContext("rider1", {}).firestore();
+      await assertSucceeds(getDoc(doc(asRider, "orders/order1")));
+    });
+
+    it("still lets a claimed rider with no doc yet read a pending order (legacy path)", async () => {
+      await seedPendingOrderAndRider(null);
+
+      const asRider = testEnv.authenticatedContext("rider1", { delivery: true }).firestore();
+      await assertSucceeds(getDoc(doc(asRider, "orders/order1")));
+    });
+  });
+
   it("lets an assigned rider advance status exactly one step forward", async () => {
     await testEnv.withSecurityRulesDisabled(async (ctx) => {
       await setDoc(doc(ctx.firestore(), "orders/order1"), {
@@ -225,11 +271,12 @@ describe("firestore.rules — orders", () => {
 
   it("hides the delivery OTP from riders and admins, exposing it only to the ordering customer", async () => {
     await testEnv.withSecurityRulesDisabled(async (ctx) => {
-      await setDoc(doc(ctx.firestore(), "orders/order1"), { customerId: "cust1", status: "out_for_delivery" });
-      await setDoc(doc(ctx.firestore(), "orders/order1/private/delivery"), { otp: "1234", attempts: 0 });
+      // One firestore() per context — a second call re-applies settings to an
+      // instance that's already in use and throws.
+      const adminDb = ctx.firestore();
+      await setDoc(doc(adminDb, "orders/order1"), { customerId: "cust1", status: "out_for_delivery" });
+      await setDoc(doc(adminDb, "orders/order1/private/delivery"), { otp: "1234", attempts: 0 });
     });
-
-    const { getDoc } = await import("firebase/firestore");
 
     const asCustomer = testEnv.authenticatedContext("cust1").firestore();
     await assertSucceeds(getDoc(doc(asCustomer, "orders/order1/private/delivery")));
@@ -243,7 +290,11 @@ describe("firestore.rules — orders", () => {
 });
 
 describe("firestore.rules — deliveryBoys self-registration", () => {
-  it("lets a rider lock in their own uid by matching email, and nothing else", async () => {
+  // createRiderLogin now writes `uid` (= doc id = auth uid) when it creates the
+  // rider, so the old "claim an unlinked whitelist doc by matching email" path
+  // was removed from the rules. It must stay closed: a matching email alone
+  // must NOT let an arbitrary signed-in user take over a rider doc.
+  it("no longer lets a signed-in user claim an unlinked rider doc just by matching its email", async () => {
     await testEnv.withSecurityRulesDisabled(async (ctx) => {
       await setDoc(doc(ctx.firestore(), "deliveryBoys/riderDoc1"), {
         email: "rider@example.com",
@@ -255,7 +306,7 @@ describe("firestore.rules — deliveryBoys self-registration", () => {
     const asRider = testEnv
       .authenticatedContext("rider1", { email: "rider@example.com" })
       .firestore();
-    await assertSucceeds(updateDoc(doc(asRider, "deliveryBoys/riderDoc1"), { uid: "rider1" }));
+    await assertFails(updateDoc(doc(asRider, "deliveryBoys/riderDoc1"), { uid: "rider1" }));
   });
 
   it("blocks a rider from changing fields beyond uid/fcmTokens during self-registration", async () => {
@@ -372,7 +423,9 @@ describe("firestore.rules — deliveryBoys onDuty / profile self-edit", () => {
     );
   });
 
-  it("still blocks a rider from touching isActive or village while updating onDuty", async () => {
+  // village is on the rider self-edit allowlist (Edit Profile screen); only the
+  // admin-controlled isActive flag must stay locked.
+  it("lets a rider edit their own village but still blocks touching isActive while updating onDuty", async () => {
     await testEnv.withSecurityRulesDisabled(async (ctx) => {
       await setDoc(doc(ctx.firestore(), "deliveryBoys/rider1"), {
         email: "rider@example.com",
@@ -390,7 +443,7 @@ describe("firestore.rules — deliveryBoys onDuty / profile self-edit", () => {
     await assertFails(
       updateDoc(doc(asRider, "deliveryBoys/rider1"), { onDuty: false, isActive: false })
     );
-    await assertFails(
+    await assertSucceeds(
       updateDoc(doc(asRider, "deliveryBoys/rider1"), { onDuty: false, village: "Rayakuduru" })
     );
   });

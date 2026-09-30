@@ -20,7 +20,7 @@ This document outlines the core data models and entities used across the HyperMa
 Defined in: `lib/core/models/user_model.dart`
 
 ### AddressModel
-Represents customer delivery addresses with granular village/mandal and optional geo-coordinates.
+Represents customer delivery addresses with granular village/mandal and optional geo-coordinates. Implements custom `operator ==` and `hashCode` based on `id` / address content to guarantee reliable `DropdownButtonFormField` matching.
 
 | Field | Type | Required / Default | Description |
 |---|---|---|---|
@@ -52,13 +52,24 @@ Represents system users across roles: `customer`, `delivery`, `admin`.
 | `createdAt` | `DateTime` | Required | Account creation timestamp |
 | `createdBy` | `String?` | Optional | Admin UID who invited/created delivery boy account |
 | `addresses` | `List<AddressModel>` | `[]` | Saved customer delivery addresses |
-| `avatarUrl` | `String?` | Optional | Profile picture URL |
+| `avatarUrl` | `String?` | Optional | Profile picture URL (auto-synced on Google Sign-In) |
 | `vehicleDetails` | `String?` | Optional | Vehicle type/model for delivery rider |
 | `vehicleNo` | `String?` | Optional | Vehicle registration number |
 | `licenseNo` | `String?` | Optional | Driver license number |
 | `fcmTokens` | `List<String>` | `[]` | FCM registration tokens for device push notifications |
 | `favoriteProductIds` | `List<String>` | `[]` | List of favorited product IDs |
 | `notificationsEnabled` | `bool` | `true` | Customer notification opt-in toggle |
+| `cart` | `Map<String, dynamic>` | `{}` | Persistent cart items map synced with Firestore `/users/{uid}` |
+
+### CartItem Model
+Defined in: `lib/core/providers/cart_provider.dart`
+
+Represents an active shopping cart item with item snapshot and quantity, supporting local device persistence via `SharedPreferences` (`cart_items_<uid>`) and real-time cloud sync with Firebase.
+
+| Field | Type | Required / Default | Description |
+|---|---|---|---|
+| `product` | `Product` | Required | Product entity snapshot |
+| `quantity` | `int` | `1` | Purchased item quantity |
 
 ---
 

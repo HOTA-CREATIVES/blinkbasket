@@ -1,5 +1,6 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import '../../domain/entities/app_config.dart';
+import '../../domain/entities/service_zone.dart';
 
 class AppConfigDto extends AppConfig {
   AppConfigDto({
@@ -12,7 +13,21 @@ class AppConfigDto extends AppConfig {
     super.supportPhone,
     super.supportWhatsapp,
     super.categories,
+    super.maintenanceMode,
+    super.minimumOrderAmount,
+    super.maxOrdersPerSlot,
+    super.serviceZones,
+    super.privacyPolicy,
+    super.termsAndConditions,
   });
+
+  /// Blank / non-string values mean "not configured" so the bundled default
+  /// text is used instead of an empty page.
+  static String? _nonBlank(Object? value) {
+    if (value is! String) return null;
+    final trimmed = value.trim();
+    return trimmed.isEmpty ? null : trimmed;
+  }
 
   factory AppConfigDto.fromMap(Map<String, dynamic> map) {
     return AppConfigDto(
@@ -37,6 +52,17 @@ class AppConfigDto extends AppConfig {
               .where((s) => s.trim().isNotEmpty)
               .toList() ??
           const [],
+      maintenanceMode: map['maintenanceMode'] ?? false,
+      minimumOrderAmount: (map['minimumOrderAmount'] ?? 0.0).toDouble(),
+      maxOrdersPerSlot: (map['maxOrdersPerSlot'] as num?)?.toInt() ?? 20,
+      serviceZones: (map['serviceZones'] as List<dynamic>?)
+              ?.whereType<Map<String, dynamic>>()
+              .map(ServiceZone.fromMap)
+              .where((z) => z.name.isNotEmpty)
+              .toList() ??
+          const [],
+      privacyPolicy: _nonBlank(map['privacyPolicy']),
+      termsAndConditions: _nonBlank(map['termsAndConditions']),
     );
   }
 
@@ -51,6 +77,13 @@ class AppConfigDto extends AppConfig {
       'supportPhone': supportPhone,
       'supportWhatsapp': supportWhatsapp,
       'categories': categories,
+      'maintenanceMode': maintenanceMode,
+      'minimumOrderAmount': minimumOrderAmount,
+      'maxOrdersPerSlot': maxOrdersPerSlot,
+      'serviceZones': serviceZones.map((z) => z.toMap()).toList(),
+      'privacyPolicy': privacyPolicy,
+      'termsAndConditions': termsAndConditions,
     };
   }
 }
+

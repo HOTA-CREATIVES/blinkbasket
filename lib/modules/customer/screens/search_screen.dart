@@ -7,8 +7,8 @@ import '../../../core/design/widgets/empty_state.dart';
 import '../../../core/design/widgets/product_card.dart';
 import '../../../core/providers/cart_provider.dart';
 import '../../../core/providers/product_provider.dart';
+import '../../../core/utils/route_generator.dart';
 import '../../../domain/entities/product.dart';
-import 'product_details_screen.dart';
 
 class SearchScreen extends StatefulWidget {
   const SearchScreen({super.key});
@@ -23,6 +23,11 @@ class _SearchScreenState extends State<SearchScreen> {
   Timer? _debounceTimer;
   String _query = '';
   List<String> _recentSearches = [];
+
+  // Created once, not in build(): building a new stream on every keystroke
+  // made the StreamBuilder re-subscribe (and flash its loading state).
+  late final Stream<List<Product>> _productsStream =
+      Provider.of<ProductProvider>(context, listen: false).streamProducts();
 
   @override
   void initState() {
@@ -42,6 +47,7 @@ class _SearchScreenState extends State<SearchScreen> {
   Future<void> _loadRecentSearches() async {
     try {
       final prefs = await SharedPreferences.getInstance();
+      if (!mounted) return;
       setState(() {
         _recentSearches = prefs.getStringList('recent_searches') ?? [];
       });
@@ -82,10 +88,17 @@ class _SearchScreenState extends State<SearchScreen> {
       setState(() {
         _query = value.trim();
       });
-      if (_query.isNotEmpty) {
-        _saveRecentSearch(_query);
-      }
     });
+  }
+
+  /// Commit the current query to recent searches — only on an explicit
+  /// submit, so we don't persist every intermediate keystroke ("mi", "mil",
+  /// "milk") as the user types.
+  void _commitSearch(String value) {
+    _debounceTimer?.cancel();
+    final trimmed = value.trim();
+    setState(() => _query = trimmed);
+    if (trimmed.isNotEmpty) _saveRecentSearch(trimmed);
   }
 
   void _runSearch(String search) {
@@ -123,18 +136,23 @@ class _SearchScreenState extends State<SearchScreen> {
           child: TextField(
             controller: _searchController,
             focusNode: _focusNode,
+            textInputAction: TextInputAction.search,
+            onSubmitted: _commitSearch,
             decoration: InputDecoration(
               hintText: 'Search fresh produce, dairy...',
               prefixIcon: const Icon(Icons.search_rounded),
               suffixIcon: _searchController.text.isNotEmpty
-                  ? IconButton(
-                      icon: const Icon(Icons.clear_rounded),
-                      onPressed: () {
-                        _searchController.clear();
-                        setState(() {
-                          _query = '';
-                        });
-                      },
+                  ? Tooltip(
+                      message: 'Clear',
+                      child: IconButton(
+                        icon: const Icon(Icons.clear_rounded),
+                        onPressed: () {
+                          _searchController.clear();
+                          setState(() {
+                            _query = '';
+                          });
+                        },
+                      ),
                     )
                   : null,
               contentPadding: const EdgeInsets.symmetric(
@@ -151,10 +169,18 @@ class _SearchScreenState extends State<SearchScreen> {
         ),
       ),
       body: StreamBuilder<List<Product>>(
-        stream: Provider.of<ProductProvider>(context, listen: false).streamProducts(),
+        stream: _productsStream,
         builder: (context, snapshot) {
-          if (snapshot.connectionState == ConnectionState.waiting) {
-            return const Center(child: CircularProgressIndicator());
+          if (snapshot.connectionState == ConnectionState.waiting && !snapshot.hasData) {
+            return Center(child: CircularProgressIndicator(color: AppTokens.primary));
+          }
+
+          if (snapshot.hasError) {
+            return const EmptyState(
+              icon: Icons.error_outline_rounded,
+              title: 'Couldn\'t load products',
+              message: 'Check your connection and try again.',
+            );
           }
 
           final allProducts = snapshot.data ?? [];
@@ -169,7 +195,7 @@ class _SearchScreenState extends State<SearchScreen> {
               );
             }
 
-            return Padding(
+            return SingleChildScrollView(
               padding: const EdgeInsets.all(AppTokens.s20),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
@@ -218,16 +244,30 @@ class _SearchScreenState extends State<SearchScreen> {
             );
           }
 
-          return GridView.builder(
-            padding: const EdgeInsets.all(AppTokens.s16),
-            gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-              crossAxisCount: 2,
-              childAspectRatio: 0.72,
-              crossAxisSpacing: AppTokens.s16,
-              mainAxisSpacing: AppTokens.s16,
-            ),
-            itemCount: filtered.length,
-            itemBuilder: (context, index) {
+          return Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Padding(
+                padding: const EdgeInsets.fromLTRB(AppTokens.s16, AppTokens.s12, AppTokens.s16, AppTokens.s4),
+                child: Text(
+                  'Found ${filtered.length} ${filtered.length == 1 ? 'item' : 'items'} for "$_query"',
+                  style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                        fontWeight: FontWeight.w600,
+                        color: scheme.onSurfaceVariant,
+                      ),
+                ),
+              ),
+              Expanded(
+                child: GridView.builder(
+                  padding: const EdgeInsets.all(AppTokens.s16),
+                  gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+                    crossAxisCount: 2,
+                    childAspectRatio: 0.65,
+                    crossAxisSpacing: AppTokens.s16,
+                    mainAxisSpacing: AppTokens.s16,
+                  ),
+                  itemCount: filtered.length,
+                  itemBuilder: (context, index) {
               final product = filtered[index];
               final inCartQty = context
                   .select<CartProvider, int>((c) => c.quantityOf(product.id));
@@ -237,17 +277,19 @@ class _SearchScreenState extends State<SearchScreen> {
                 quantityInCart: inCartQty,
                 onAdd: () => cartProvider.addItem(product),
                 onRemove: () => cartProvider.decrementItem(product.id),
-                onTap: () => Navigator.push(
+                onTap: () => Navigator.pushNamed(
                   context,
-                  MaterialPageRoute(
-                    builder: (_) => ProductDetailsScreen(product: product),
-                  ),
+                  RouteGenerator.productDetails,
+                  arguments: product,
                 ),
               );
             },
-          );
-        },
-      ),
+          ),
+        ),
+      ],
+    );
+  },
+),
     );
   }
 }

@@ -10,8 +10,8 @@ import '../../../core/providers/auth_provider.dart';
 import '../../../core/providers/cart_provider.dart';
 import '../../../core/providers/product_provider.dart';
 import '../../../core/providers/profile_provider.dart';
+import '../../../core/utils/route_generator.dart';
 import '../../../domain/entities/product.dart';
-import 'cart_screen.dart';
 
 /// Full-page product details screen, Blinkit-style: hero image with a
 /// floating ADD/quantity control, delivery ETA badge, price, product
@@ -28,9 +28,30 @@ class ProductDetailsScreen extends StatefulWidget {
 class _ProductDetailsScreenState extends State<ProductDetailsScreen> {
   @override
   Widget build(BuildContext context) {
+    // The catalog is a shared broadcast stream — resolve the live product so
+    // price and stock stay current instead of trusting the (possibly stale)
+    // entity we were constructed with.
+    return StreamBuilder<List<Product>>(
+      stream: context.read<ProductProvider>().streamProducts(),
+      builder: (context, snapshot) {
+        var product = widget.product;
+        final list = snapshot.data;
+        if (list != null) {
+          for (final p in list) {
+            if (p.id == widget.product.id) {
+              product = p;
+              break;
+            }
+          }
+        }
+        return _buildScaffold(context, product);
+      },
+    );
+  }
+
+  Widget _buildScaffold(BuildContext context, Product product) {
     final scheme = Theme.of(context).colorScheme;
     final cart = context.watch<CartProvider>();
-    final product = widget.product;
     final quantity = cart.items[product.id]?.quantity ?? 0;
     final outOfStock = product.stock <= 0;
     final lowStock = !outOfStock && product.stock <= 5;
@@ -54,20 +75,29 @@ class _ProductDetailsScreenState extends State<ProductDetailsScreen> {
             actions: [
               Padding(
                 padding: const EdgeInsets.all(AppTokens.s8),
-                child: _FavoriteIconButton(product: product),
+                child: Tooltip(
+                  message: 'Favorite',
+                  child: _FavoriteIconButton(product: product),
+                ),
               ),
               Padding(
                 padding: const EdgeInsets.all(AppTokens.s8),
-                child: _RoundIconButton(
-                  icon: Icons.share_outlined,
-                  onTap: () => Share.share(
-                    'Check out ${product.name} on J C Mart — ₹${_formatPrice(product.price)} (${product.unit})',
+                child: Tooltip(
+                  message: 'Share',
+                  child: _RoundIconButton(
+                    icon: Icons.share_outlined,
+                    onTap: () => Share.share(
+                      'Check out ${product.name} on J C Mart — ₹${_formatPrice(product.price)} (${product.unit})',
+                    ),
                   ),
                 ),
               ),
               Padding(
                 padding: const EdgeInsets.fromLTRB(0, AppTokens.s8, AppTokens.s16, AppTokens.s8),
-                child: _CartIconButton(),
+                child: Tooltip(
+                  message: 'View Cart',
+                  child: _CartIconButton(),
+                ),
               ),
             ],
             flexibleSpace: FlexibleSpaceBar(
@@ -213,7 +243,7 @@ class _ProductDetailsScreenState extends State<ProductDetailsScreen> {
                           SizedBox(width: AppTokens.s8),
                           Expanded(
                             child: Text(
-                              'Prescription required — our team will contact you to verify before dispatch.',
+                              'Prescription required — this medicine can\'t be ordered in the app yet.',
                               style: TextStyle(fontSize: 13, color: AppTokens.medicine),
                             ),
                           ),
@@ -241,6 +271,123 @@ class _ProductDetailsScreenState extends State<ProductDetailsScreen> {
             ),
           ),
         ],
+      ),
+      bottomNavigationBar: Container(
+        padding: EdgeInsets.fromLTRB(
+          AppTokens.s16,
+          AppTokens.s12,
+          AppTokens.s16,
+          AppTokens.s12 + MediaQuery.of(context).padding.bottom,
+        ),
+        decoration: BoxDecoration(
+          color: scheme.surface,
+          border: Border(top: BorderSide(color: scheme.outlineVariant.withValues(alpha: 0.5))),
+          boxShadow: AppTokens.shadowSm(scheme.shadow),
+        ),
+        child: outOfStock
+            ? Container(
+                height: 48,
+                alignment: Alignment.center,
+                decoration: BoxDecoration(
+                  color: scheme.surfaceContainerHighest,
+                  borderRadius: BorderRadius.circular(AppTokens.rMd),
+                ),
+                child: Text(
+                  'Item Currently Out of Stock',
+                  style: TextStyle(
+                    fontWeight: FontWeight.w700,
+                    color: scheme.onSurfaceVariant.withValues(alpha: 0.6),
+                  ),
+                ),
+              )
+            : product.requiresPrescription
+                ? Container(
+                    height: 48,
+                    alignment: Alignment.center,
+                    decoration: BoxDecoration(
+                      color: AppTokens.medicine.withValues(alpha: 0.1),
+                      borderRadius: BorderRadius.circular(AppTokens.rMd),
+                    ),
+                    child: const Text(
+                      'Requires Prescription (In-Store Only)',
+                      style: TextStyle(fontWeight: FontWeight.w700, color: AppTokens.medicine),
+                    ),
+                  )
+                : Row(
+                    children: [
+                      Column(
+                        mainAxisSize: MainAxisSize.min,
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            'Price',
+                            style: Theme.of(context).textTheme.bodySmall?.copyWith(fontSize: 11),
+                          ),
+                          Text(
+                            '₹${_formatPrice(product.discountedPrice ?? product.price)}',
+                            style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                                  fontWeight: FontWeight.w800,
+                                ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(width: AppTokens.s16),
+                      Expanded(
+                        child: quantity > 0
+                            ? Row(
+                                children: [
+                                  QuantityStepper(
+                                    quantity: quantity,
+                                    onIncrement: () => cart.addItem(product),
+                                    onDecrement: () => cart.decrementItem(product.id),
+                                    canIncrement: quantity < product.stock,
+                                  ),
+                                  const SizedBox(width: AppTokens.s12),
+                                  Expanded(
+                                    child: ElevatedButton(
+                                      style: ElevatedButton.styleFrom(
+                                        backgroundColor: scheme.primary,
+                                        foregroundColor: scheme.onPrimary,
+                                        shape: RoundedRectangleBorder(
+                                          borderRadius: BorderRadius.circular(AppTokens.rMd),
+                                        ),
+                                        padding: const EdgeInsets.symmetric(vertical: 14),
+                                      ),
+                                      onPressed: () => Navigator.pushNamed(context, RouteGenerator.cart),
+                                      child: Row(
+                                        mainAxisAlignment: MainAxisAlignment.center,
+                                        children: [
+                                          const Text(
+                                            'View Cart',
+                                            style: TextStyle(fontWeight: FontWeight.w700),
+                                          ),
+                                          const SizedBox(width: 6),
+                                          const Icon(Icons.arrow_forward_rounded, size: 16),
+                                        ],
+                                      ),
+                                    ),
+                                  ),
+                                ],
+                              )
+                            : ElevatedButton.icon(
+                                style: ElevatedButton.styleFrom(
+                                  backgroundColor: scheme.primary,
+                                  foregroundColor: scheme.onPrimary,
+                                  shape: RoundedRectangleBorder(
+                                    borderRadius: BorderRadius.circular(AppTokens.rMd),
+                                  ),
+                                  padding: const EdgeInsets.symmetric(vertical: 14),
+                                ),
+                                icon: const Icon(Icons.add_shopping_cart_rounded, size: 18),
+                                label: const Text(
+                                  'Add to Cart',
+                                  style: TextStyle(fontWeight: FontWeight.w700),
+                                ),
+                                onPressed: () => cart.addItem(product),
+                              ),
+                      ),
+                    ],
+                  ),
       ),
     );
   }
@@ -301,8 +448,9 @@ class _RoundIconButton extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
     return Material(
-      color: Colors.white,
+      color: scheme.surface,
       shape: const CircleBorder(),
       elevation: 2,
       child: InkWell(
@@ -310,7 +458,7 @@ class _RoundIconButton extends StatelessWidget {
         onTap: onTap,
         child: Padding(
           padding: const EdgeInsets.all(AppTokens.s8),
-          child: Icon(icon, size: 20, color: Colors.black87),
+          child: Icon(icon, size: 20, color: scheme.onSurface),
         ),
       ),
     );
@@ -324,11 +472,12 @@ class _FavoriteIconButton extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
     final favorites = context.watch<AuthProvider>().currentUserModel?.favoriteProductIds ?? const [];
     final isFavorite = favorites.contains(product.id);
 
     return Material(
-      color: Colors.white,
+      color: scheme.surface,
       shape: const CircleBorder(),
       elevation: 2,
       child: InkWell(
@@ -342,7 +491,7 @@ class _FavoriteIconButton extends StatelessWidget {
           child: Icon(
             isFavorite ? Icons.favorite_rounded : Icons.favorite_border_rounded,
             size: 20,
-            color: isFavorite ? Colors.red : Colors.black87,
+            color: isFavorite ? Colors.red : scheme.onSurface,
           ),
         ),
       ),
@@ -353,23 +502,21 @@ class _FavoriteIconButton extends StatelessWidget {
 class _CartIconButton extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
     final cart = context.watch<CartProvider>();
     return Material(
-      color: Colors.white,
+      color: scheme.surface,
       shape: const CircleBorder(),
       elevation: 2,
       child: InkWell(
         customBorder: const CircleBorder(),
-        onTap: () => Navigator.push(
-          context,
-          MaterialPageRoute(builder: (_) => const CartScreen()),
-        ),
+        onTap: () => Navigator.pushNamed(context, RouteGenerator.cart),
         child: Padding(
           padding: const EdgeInsets.all(AppTokens.s8),
           child: Badge(
             isLabelVisible: cart.itemCount > 0,
             label: Text('${cart.itemCount}'),
-            child: const Icon(Icons.shopping_cart_outlined, size: 20, color: Colors.black87),
+            child: Icon(Icons.shopping_cart_outlined, size: 20, color: scheme.onSurface),
           ),
         ),
       ),
@@ -389,7 +536,7 @@ class _FloatingAddButton extends StatelessWidget {
     return Material(
       elevation: 3,
       borderRadius: BorderRadius.circular(AppTokens.rMd),
-      color: Colors.white,
+      color: scheme.surface,
       child: InkWell(
         borderRadius: BorderRadius.circular(AppTokens.rMd),
         onTap: outOfStock
@@ -435,10 +582,10 @@ class _SimilarProducts extends StatelessWidget {
     return StreamBuilder<List<Product>>(
       stream: context.read<ProductProvider>().streamProducts(),
       builder: (context, snapshot) {
-        if (snapshot.connectionState == ConnectionState.waiting) {
-          return const SizedBox(
+        if (snapshot.connectionState == ConnectionState.waiting && !snapshot.hasData) {
+          return SizedBox(
             height: 220,
-            child: Center(child: CircularProgressIndicator()),
+            child: Center(child: CircularProgressIndicator(color: scheme.primary)),
           );
         }
         final similar = (snapshot.data ?? [])
@@ -471,11 +618,13 @@ class _SimilarProducts extends StatelessWidget {
                       quantityInCart: inCartQty,
                       onAdd: () => cart.addItem(product),
                       onRemove: () => cart.decrementItem(product.id),
-                      onTap: () => Navigator.push(
+                      // Replace rather than stack: hopping product -> similar
+                      // product -> similar product... should not build an
+                      // unbounded back stack.
+                      onTap: () => Navigator.pushReplacementNamed(
                         context,
-                        MaterialPageRoute(
-                          builder: (_) => ProductDetailsScreen(product: product),
-                        ),
+                        RouteGenerator.productDetails,
+                        arguments: product,
                       ),
                     );
                   },

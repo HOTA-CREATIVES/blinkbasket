@@ -1,11 +1,12 @@
 import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
-import 'package:geolocator/geolocator.dart';
 import 'package:http/http.dart' as http;
-import '../../../core/data/villages.dart';
 import '../../../core/models/user_model.dart';
 import '../../../core/providers/profile_provider.dart';
+import '../../../core/providers/config_provider.dart';
+import '../../../core/services/location_service.dart';
+import '../../../core/utils/customer_helper.dart';
 import '../../../core/design/app_tokens.dart';
 import '../../auth/widgets/village_dropdown.dart';
 
@@ -30,6 +31,7 @@ class _AddAddressScreenState extends State<AddAddressScreen> {
   double? _latitudeVal;
   double? _longitudeVal;
   String? _locationError;
+  LocationResult? _failedFix; // set when GPS failed for a fixable reason
 
   @override
   void dispose() {
@@ -42,31 +44,41 @@ class _AddAddressScreenState extends State<AddAddressScreen> {
   }
 
   Future<void> _fetchLiveLocation() async {
+    // Read from the widget tree before any await, then use the captured value
+    // across async gaps (avoids use_build_context_synchronously).
+    final liveZones =
+        Provider.of<ConfigProvider>(context, listen: false).latestServiceZones;
     setState(() {
       _isLocationLoading = true;
       _locationError = null;
+      _failedFix = null;
     });
     try {
-      bool serviceEnabled = await Geolocator.isLocationServiceEnabled();
-      if (!serviceEnabled) throw 'GPS services are disabled. Please enable GPS in settings.';
-
-      LocationPermission permission = await Geolocator.checkPermission();
-      if (permission == LocationPermission.denied) {
-        permission = await Geolocator.requestPermission();
-        if (permission == LocationPermission.denied) throw 'Location permissions were denied.';
-      }
-      if (permission == LocationPermission.deniedForever) {
-        throw 'Location permissions are permanently denied. Please enable them in app settings.';
+      final fixResult = await LocationService.currentFix();
+      final fix = fixResult.fix;
+      if (fix == null) {
+        if (mounted) setState(() => _failedFix = fixResult);
+        throw fixResult.message;
       }
 
-      Position position = await Geolocator.getCurrentPosition(
-        locationSettings: const LocationSettings(
-          accuracy: LocationAccuracy.high,
-        ),
-      );
+      final lat = fix.latitude;
+      final lng = fix.longitude;
 
-      final lat = position.latitude;
-      final lng = position.longitude;
+      // Zone membership comes from the coordinates (admin zones), not from
+      // fuzzy-matching Nominatim's free text — that matched the FIRST zone
+      // whenever the geocoder returned no village name.
+      final zoneMatch = CustomerHelper.nearestZone(lat, lng, liveZones);
+      if (!zoneMatch.isInside) {
+        throw "Sorry, we don't deliver to this location yet.";
+      }
+      // Keep the GPS fix even if the reverse-geocode below fails.
+      if (mounted) {
+        setState(() {
+          _latitudeVal = lat;
+          _longitudeVal = lng;
+          _selectedVillage = zoneMatch.name;
+        });
+      }
 
       final url = Uri.parse(
           'https://nominatim.openstreetmap.org/reverse?format=json&lat=$lat&lon=$lng&zoom=18&addressdetails=1');
@@ -80,22 +92,11 @@ class _AddAddressScreenState extends State<AddAddressScreen> {
         final address = data['address'] as Map<String, dynamic>? ?? {};
 
         final road = address['road'] ?? address['suburb'] ?? address['neighbourhood'] ?? '';
-        final villageName = (address['village'] ?? address['town'] ?? address['city'] ?? '').toString();
         final mandalName = address['county'] ?? address['state_district'] ?? '';
         final postcode = address['postcode'] ?? '';
 
-        String? matchedVillage;
-        for (var village in Villages.names) {
-          if (villageName.toLowerCase().contains(village.toLowerCase()) ||
-              village.toLowerCase().contains(villageName.toLowerCase())) {
-            matchedVillage = village;
-            break;
-          }
-        }
-
+        if (!mounted) return;
         setState(() {
-          _latitudeVal = lat;
-          _longitudeVal = lng;
           if (road.toString().isNotEmpty) {
             _addressController.text = road.toString();
           }
@@ -105,9 +106,6 @@ class _AddAddressScreenState extends State<AddAddressScreen> {
           if (postcode.toString().isNotEmpty) {
             _pinCodeController.text = postcode.toString();
           }
-          if (matchedVillage != null) {
-            _selectedVillage = matchedVillage;
-          }
         });
         
         if (mounted) {
@@ -116,16 +114,20 @@ class _AddAddressScreenState extends State<AddAddressScreen> {
           );
         }
       } else {
-        throw 'Failed to parse location addresses.';
+        throw 'Location saved, but address details could not be fetched — please fill them in.';
       }
     } catch (e) {
-      setState(() {
-        _locationError = e.toString();
-      });
+      if (mounted) {
+        setState(() {
+          _locationError = e.toString();
+        });
+      }
     } finally {
-      setState(() {
-        _isLocationLoading = false;
-      });
+      if (mounted) {
+        setState(() {
+          _isLocationLoading = false;
+        });
+      }
     }
   }
 
@@ -171,12 +173,13 @@ class _AddAddressScreenState extends State<AddAddressScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
     return Scaffold(
-      backgroundColor: Colors.white,
+      backgroundColor: scheme.surface,
       appBar: AppBar(
         title: const Text("Create Address", style: TextStyle(fontWeight: FontWeight.bold, fontSize: 18)),
-        backgroundColor: Colors.white,
-        foregroundColor: Colors.black87,
+        backgroundColor: scheme.surface,
+        foregroundColor: scheme.onSurface,
         elevation: 0.5,
         leading: IconButton(
           icon: const Icon(Icons.arrow_back_ios_new_rounded, size: 20),
@@ -195,69 +198,79 @@ class _AddAddressScreenState extends State<AddAddressScreen> {
                 ElevatedButton.icon(
                   onPressed: _isLocationLoading ? null : _fetchLiveLocation,
                   icon: _isLocationLoading
-                      ? const SizedBox(
+                      ? SizedBox(
                           width: 16,
                           height: 16,
                           child: CircularProgressIndicator(
                             strokeWidth: 2,
-                            valueColor: AlwaysStoppedAnimation(Colors.green),
+                            valueColor: AlwaysStoppedAnimation(scheme.primary),
                           ),
                         )
                       : const Icon(Icons.my_location_rounded, size: 18),
                   label: Text(_isLocationLoading ? 'Fetching Live Location...' : 'Use Current Live Location'),
                   style: ElevatedButton.styleFrom(
-                    backgroundColor: Colors.green.shade50,
-                    foregroundColor: Colors.green.shade800,
+                    backgroundColor: AppTokens.primary.withValues(alpha: 0.08),
+                    foregroundColor: scheme.primary,
                     elevation: 0,
                     shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(12),
-                      side: BorderSide(color: Colors.green.shade100),
+                      borderRadius: BorderRadius.circular(AppTokens.rMd),
+                      side: BorderSide(color: AppTokens.primary.withValues(alpha: 0.15)),
                     ),
                     padding: const EdgeInsets.symmetric(vertical: 14),
                   ),
                 ),
-                const SizedBox(height: 12),
+                const SizedBox(height: AppTokens.s12),
 
                 // Location Fetch Coordinates Status
                 if (_latitudeVal != null && _longitudeVal != null) ...[
                   Container(
-                    padding: const EdgeInsets.all(12),
+                    padding: const EdgeInsets.all(AppTokens.s12),
                     decoration: BoxDecoration(
-                      color: Colors.grey.shade50,
-                      borderRadius: BorderRadius.circular(12),
-                      border: Border.all(color: Colors.grey.shade200),
+                      color: scheme.surfaceContainerLowest,
+                      borderRadius: BorderRadius.circular(AppTokens.rMd),
+                      border: Border.all(color: scheme.outlineVariant),
                     ),
                     child: Row(
                       mainAxisAlignment: MainAxisAlignment.center,
                       children: [
-                        const Icon(Icons.gps_fixed_rounded, size: 14, color: Colors.green),
-                        const SizedBox(width: 8),
+                        Icon(Icons.gps_fixed_rounded, size: 14, color: scheme.primary),
+                        const SizedBox(width: AppTokens.s8),
                         Text(
                           'Captured Coordinates: ${_latitudeVal!.toStringAsFixed(6)}, ${_longitudeVal!.toStringAsFixed(6)}',
-                          style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: Colors.black87),
+                          style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: scheme.onSurface),
                         ),
                       ],
                     ),
                   ),
-                  const SizedBox(height: 16),
+                  const SizedBox(height: AppTokens.s16),
                 ],
 
                 // Location Fetch Errors
                 if (_locationError != null) ...[
                   Container(
-                    padding: const EdgeInsets.all(12),
+                    padding: const EdgeInsets.all(AppTokens.s12),
                     decoration: BoxDecoration(
-                      color: Colors.red.shade50,
-                      borderRadius: BorderRadius.circular(12),
-                      border: Border.all(color: Colors.red.shade100),
+                      color: scheme.error.withValues(alpha: 0.08),
+                      borderRadius: BorderRadius.circular(AppTokens.rMd),
+                      border: Border.all(color: scheme.error.withValues(alpha: 0.2)),
                     ),
-                    child: Text(
-                      _locationError!,
-                      style: TextStyle(color: Colors.red.shade800, fontSize: 12),
-                      textAlign: TextAlign.center,
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Text(
+                          _locationError!,
+                          style: TextStyle(color: scheme.error, fontSize: 12),
+                          textAlign: TextAlign.center,
+                        ),
+                        if (_failedFix?.canOpenSettings ?? false)
+                          TextButton(
+                            onPressed: _failedFix!.openSettings,
+                            child: const Text('Open settings'),
+                          ),
+                      ],
                     ),
                   ),
-                  const SizedBox(height: 16),
+                  const SizedBox(height: AppTokens.s16),
                 ],
 
                 // Form Field: Name/Label
@@ -269,7 +282,7 @@ class _AddAddressScreenState extends State<AddAddressScreen> {
                   ),
                   validator: (v) => v == null || v.trim().isEmpty ? "Title is required" : null,
                 ),
-                const SizedBox(height: 16),
+                const SizedBox(height: AppTokens.s16),
 
                 // Form Field: Address Line 1
                 TextFormField(
@@ -280,14 +293,23 @@ class _AddAddressScreenState extends State<AddAddressScreen> {
                   ),
                   validator: (v) => v == null || v.trim().isEmpty ? "Address Line 1 is required" : null,
                 ),
-                const SizedBox(height: 16),
+                const SizedBox(height: AppTokens.s16),
 
-                // Form Field: Village Dropdown
-                VillageDropdown(
-                  value: _selectedVillage,
-                  onChanged: (v) => setState(() => _selectedVillage = v),
-                ),
-                const SizedBox(height: 16),
+                // Form Field: Village / Zone Dropdown — uses live zones from Firestore
+                Builder(builder: (context) {
+                  final liveZones = Provider.of<ConfigProvider>(context,
+                          listen: false)
+                      .latestServiceZones;
+                  final zoneNames = liveZones.isNotEmpty
+                      ? liveZones.map((z) => z.name).toList()
+                      : null;
+                  return VillageDropdown(
+                    value: _selectedVillage,
+                    onChanged: (v) => setState(() => _selectedVillage = v),
+                    zoneNames: zoneNames,
+                  );
+                }),
+                const SizedBox(height: AppTokens.s16),
 
                 // Form Field: Mandal
                 TextFormField(
@@ -298,7 +320,7 @@ class _AddAddressScreenState extends State<AddAddressScreen> {
                   ),
                   validator: (v) => v == null || v.trim().isEmpty ? "Mandal is required" : null,
                 ),
-                const SizedBox(height: 16),
+                const SizedBox(height: AppTokens.s16),
 
                 // Row: Pincode and Landmark
                 Row(
@@ -321,7 +343,7 @@ class _AddAddressScreenState extends State<AddAddressScreen> {
                         },
                       ),
                     ),
-                    const SizedBox(width: 12),
+                    const SizedBox(width: AppTokens.s12),
                     Expanded(
                       child: TextFormField(
                         controller: _landmarkController,
@@ -333,22 +355,22 @@ class _AddAddressScreenState extends State<AddAddressScreen> {
                     ),
                   ],
                 ),
-                const SizedBox(height: 32),
+                const SizedBox(height: AppTokens.s32),
 
                 // Submit Button
                 ElevatedButton(
                   onPressed: _isSaving ? null : _saveAddress,
                   style: ElevatedButton.styleFrom(
-                    backgroundColor: Colors.green,
-                    foregroundColor: Colors.white,
-                    padding: const EdgeInsets.symmetric(vertical: 16),
-                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                    backgroundColor: scheme.primary,
+                    foregroundColor: scheme.onPrimary,
+                    padding: const EdgeInsets.symmetric(vertical: AppTokens.s16),
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(AppTokens.rMd)),
                   ),
                   child: _isSaving
-                      ? const SizedBox(
+                      ? SizedBox(
                           width: 20,
                           height: 20,
-                          child: CircularProgressIndicator(strokeWidth: 2.2, color: Colors.white),
+                          child: CircularProgressIndicator(strokeWidth: 2.2, color: scheme.onPrimary),
                         )
                       : const Text("Save Address", style: TextStyle(fontWeight: FontWeight.bold, fontSize: 15)),
                 ),

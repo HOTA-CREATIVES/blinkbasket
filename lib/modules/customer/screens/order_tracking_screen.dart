@@ -11,10 +11,10 @@ import '../../../core/providers/cart_provider.dart';
 import '../../../core/providers/config_provider.dart';
 import '../../../core/providers/order_provider.dart';
 import '../../../core/utils/reorder_helper.dart';
-import '../../../data/repositories/firebase_product_repository.dart';
+import '../../../core/providers/product_provider.dart';
+import '../../../core/utils/route_generator.dart';
 import '../../../domain/entities/app_config.dart';
 import '../../../domain/entities/order.dart';
-import 'cart_screen.dart';
 
 class OrderTrackingScreen extends StatelessWidget {
   final String orderId;
@@ -51,11 +51,26 @@ class OrderTrackingScreen extends StatelessWidget {
     final scheme = Theme.of(context).colorScheme;
 
     return Scaffold(
-      appBar: AppBar(title: const Text('Track Order')),
+      appBar: AppBar(
+        title: const Text('Track Order'),
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.support_agent_rounded),
+            tooltip: 'Get Help for this Order',
+            onPressed: () {
+              Navigator.pushNamed(
+                context,
+                RouteGenerator.customerSupport,
+                arguments: orderId,
+              );
+            },
+          ),
+        ],
+      ),
       body: StreamBuilder<Order>(
         stream: Provider.of<OrderProvider>(context, listen: false).streamOrder(orderId),
         builder: (context, snapshot) {
-          if (snapshot.connectionState == ConnectionState.waiting) {
+          if (snapshot.connectionState == ConnectionState.waiting && !snapshot.hasData) {
             return const SkeletonList();
           }
           if (snapshot.hasError || !snapshot.hasData) {
@@ -117,6 +132,25 @@ class OrderTrackingScreen extends StatelessWidget {
                           ),
                         ],
                       ),
+                      if (order.deliveryInstructions != null &&
+                          order.deliveryInstructions!.isNotEmpty) ...[
+                        const SizedBox(height: AppTokens.s8),
+                        Row(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Icon(Icons.note_alt_outlined,
+                                size: 16, color: scheme.onSurfaceVariant),
+                            const SizedBox(width: AppTokens.s4),
+                            Expanded(
+                              child: Text(
+                                order.deliveryInstructions!,
+                                style: TextStyle(
+                                    color: scheme.onSurfaceVariant, height: 1.4),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ],
                     ],
                   ),
                 ),
@@ -330,6 +364,42 @@ class OrderTrackingScreen extends StatelessWidget {
                       }),
                     ],
                   ),
+                ),
+              ),
+              const SizedBox(height: AppTokens.s16),
+
+              // Need Help with this Order Card
+              Container(
+                decoration: BoxDecoration(
+                  color: scheme.surface,
+                  borderRadius: BorderRadius.circular(AppTokens.rLg),
+                  border: Border.all(color: scheme.outlineVariant),
+                ),
+                child: ListTile(
+                  leading: Container(
+                    padding: const EdgeInsets.all(8),
+                    decoration: BoxDecoration(
+                      color: AppTokens.primary.withValues(alpha: 0.1),
+                      borderRadius: BorderRadius.circular(AppTokens.rMd),
+                    ),
+                    child: const Icon(Icons.support_agent_rounded, color: AppTokens.primary),
+                  ),
+                  title: Text(
+                    'Need Help with this Order?',
+                    style: Theme.of(context).textTheme.bodyMedium?.copyWith(fontWeight: FontWeight.bold),
+                  ),
+                  subtitle: Text(
+                    'Missing items, delivery delays, or refund queries',
+                    style: Theme.of(context).textTheme.bodySmall?.copyWith(color: scheme.onSurfaceVariant),
+                  ),
+                  trailing: Icon(Icons.arrow_forward_ios_rounded, size: 14, color: scheme.onSurfaceVariant),
+                  onTap: () {
+                    Navigator.pushNamed(
+                      context,
+                      RouteGenerator.customerSupport,
+                      arguments: order.id,
+                    );
+                  },
                 ),
               ),
               const SizedBox(height: AppTokens.s32),
@@ -605,6 +675,126 @@ class _NeedHelpButton extends StatelessWidget {
   }
 }
 
+class _CancelOrderButton extends StatefulWidget {
+  final String orderId;
+  const _CancelOrderButton({required this.orderId});
+
+  @override
+  State<_CancelOrderButton> createState() => _CancelOrderButtonState();
+}
+
+class _CancelOrderButtonState extends State<_CancelOrderButton> {
+  bool _isCancelling = false;
+
+  Future<void> _showCancelConfirmation(BuildContext context) async {
+    final orderProvider = Provider.of<OrderProvider>(context, listen: false);
+    final messenger = ScaffoldMessenger.of(context);
+    final errorColor = Theme.of(context).colorScheme.error;
+    final onErrorColor = Theme.of(context).colorScheme.onError;
+    final primaryColor = Theme.of(context).colorScheme.primary;
+
+    final reasonController = TextEditingController();
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Cancel Order?'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text(
+              'Are you sure you want to cancel this order? Stock will be released immediately.',
+              style: TextStyle(fontSize: 14),
+            ),
+            const SizedBox(height: AppTokens.s12),
+            TextField(
+              controller: reasonController,
+              decoration: const InputDecoration(
+                labelText: 'Reason for cancellation (optional)',
+                hintText: 'e.g., Ordered by mistake',
+              ),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(false),
+            child: const Text('Keep Order'),
+          ),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(
+              backgroundColor: errorColor,
+              foregroundColor: onErrorColor,
+            ),
+            onPressed: () => Navigator.of(ctx).pop(true),
+            child: const Text('Cancel Order'),
+          ),
+        ],
+      ),
+    );
+
+    if (confirm != true || !mounted) return;
+
+    setState(() => _isCancelling = true);
+
+    final error = await orderProvider.cancelOrder(
+      widget.orderId,
+      reason: reasonController.text.trim().isEmpty ? null : reasonController.text.trim(),
+    );
+
+    if (!mounted) return;
+    setState(() => _isCancelling = false);
+
+    if (error != null) {
+      messenger.showSnackBar(
+        SnackBar(
+          content: Text(error),
+          backgroundColor: errorColor,
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+    } else {
+      messenger.showSnackBar(
+        SnackBar(
+          content: const Text('Order cancelled successfully.'),
+          backgroundColor: primaryColor,
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return SizedBox(
+      width: double.infinity,
+      child: OutlinedButton.icon(
+        style: OutlinedButton.styleFrom(
+          foregroundColor: scheme.error,
+          side: BorderSide(color: scheme.error.withValues(alpha: 0.5)),
+          padding: const EdgeInsets.symmetric(vertical: 12),
+        ),
+        onPressed: _isCancelling ? null : () => _showCancelConfirmation(context),
+        icon: _isCancelling
+            ? SizedBox(
+                width: 16,
+                height: 16,
+                child: CircularProgressIndicator(
+                  strokeWidth: 2,
+                  color: scheme.error,
+                ),
+              )
+            : const Icon(Icons.cancel_outlined, size: 18),
+        label: Text(
+          _isCancelling ? 'Cancelling Order...' : 'Cancel Order',
+          style: const TextStyle(fontWeight: FontWeight.bold),
+        ),
+      ),
+    );
+  }
+}
+
 /// Post-delivery moment: a 1-tap star rating (written immediately, no
 /// submit button), followed by a Reorder shortcut once rated. Shows a
 /// static "you rated this" line if the order already has a rating.
@@ -643,7 +833,7 @@ class _RatingAndReorderCardState extends State<_RatingAndReorderCard> {
 
     final outcome = await ReorderHelper.reorderOrderItems(
       widget.order.items,
-      FirebaseProductRepository(),
+      Provider.of<ProductProvider>(context, listen: false).getProductById,
       Provider.of<CartProvider>(context, listen: false),
     );
 
@@ -662,10 +852,7 @@ class _RatingAndReorderCardState extends State<_RatingAndReorderCard> {
             ? SnackBarAction(
                 label: 'View Cart',
                 onPressed: () {
-                  Navigator.push(
-                    context,
-                    MaterialPageRoute(builder: (_) => const CartScreen()),
-                  );
+                  Navigator.pushNamed(context, RouteGenerator.cart);
                 },
               )
             : null,
@@ -693,18 +880,21 @@ class _RatingAndReorderCardState extends State<_RatingAndReorderCard> {
               children: List.generate(5, (i) {
                 final starIndex = i + 1;
                 final filled = _rating != null && starIndex <= _rating!;
-                return IconButton(
-                  onPressed: (rated || _isSubmittingRating)
-                      ? null
-                      : () => _submitRating(starIndex),
-                  icon: Icon(
-                    filled ? Icons.star_rounded : Icons.star_outline_rounded,
-                    color: filled ? AppTokens.accent : scheme.onSurfaceVariant,
-                    size: 28,
+                return Tooltip(
+                  message: 'Rate $starIndex star${starIndex == 1 ? '' : 's'}',
+                  child: IconButton(
+                    onPressed: (rated || _isSubmittingRating)
+                        ? null
+                        : () => _submitRating(starIndex),
+                    icon: Icon(
+                      filled ? Icons.star_rounded : Icons.star_outline_rounded,
+                      color: filled ? AppTokens.accent : scheme.onSurfaceVariant,
+                      size: 28,
+                    ),
+                    padding: EdgeInsets.zero,
+                    constraints: const BoxConstraints(),
+                    splashRadius: 20,
                   ),
-                  padding: EdgeInsets.zero,
-                  constraints: const BoxConstraints(),
-                  splashRadius: 20,
                 );
               })
                   .expand((star) => [star, const SizedBox(width: AppTokens.s4)])
