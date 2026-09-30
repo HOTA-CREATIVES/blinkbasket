@@ -27,6 +27,13 @@ service cloud.firestore {
       return signedIn() && request.auth.token.admin == true && !adminDisabled();
     }
 
+    // A customer phone is a 10-digit Indian mobile (optionally +91-prefixed), or
+    // empty on a fresh stub. Enforced when the field is written so a rider is
+    // never handed an order with a number that can't be called.
+    function validPhone(value) {
+      return value is string && (value == '' || value.matches('^(\\+91)?[6-9][0-9]{9}$'));
+    }
+
     // Size/shape caps on the customer-writable collections inside a user doc,
     // so a client can't bloat it toward the 1 MiB document limit.
     function userWithinLimits() {
@@ -64,6 +71,7 @@ service cloud.firestore {
         && request.auth.uid == uid
         && request.resource.data.role == 'customer'
         && request.resource.data.isActive == true
+        && validPhone(request.resource.data.get('phone', ''))
         && userWithinLimits();
       allow update: if isAdmin()
         || (signedIn()
@@ -71,6 +79,10 @@ service cloud.firestore {
             && request.resource.data.role == resource.data.role
             && request.resource.data.isActive == resource.data.isActive
             && userWithinLimits()
+            // Only checked when the number is being changed, so an older
+            // profile with an odd stored value can still update other fields.
+            && (!request.resource.data.diff(resource.data).affectedKeys().hasAny(['phone'])
+                || validPhone(request.resource.data.get('phone', '')))
             // Customers may edit any non-privileged field except role/isActive.
             // Server-side claims (admin/delivery) are never set on this collection.
             // totalOrders/totalSpent/firstOrderCompleted are server-write

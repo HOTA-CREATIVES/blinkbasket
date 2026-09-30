@@ -401,6 +401,41 @@ describe("firestore.rules — orders", () => {
     });
   });
 
+  describe("customer phone format", () => {
+    const baseUser = { role: "customer", isActive: true, phone: "9876543210" };
+
+    it("accepts a 10-digit mobile, +91 form and an empty stub on create", async () => {
+      for (const [i, phone] of ["9876543210", "+919876543210", ""].entries()) {
+        const asCustomer = testEnv.authenticatedContext(`c${i}`).firestore();
+        await assertSucceeds(setDoc(doc(asCustomer, `users/c${i}`), { ...baseUser, phone }));
+      }
+    });
+
+    it("rejects an unusable phone on create", async () => {
+      const asCustomer = testEnv.authenticatedContext("c1").firestore();
+      await assertFails(setDoc(doc(asCustomer, "users/c1"), { ...baseUser, phone: "12345" }));
+      await assertFails(setDoc(doc(asCustomer, "users/c1"), { ...baseUser, phone: "5876543210" }));
+    });
+
+    it("rejects changing the phone to something unusable, accepts a valid change", async () => {
+      await testEnv.withSecurityRulesDisabled(async (ctx) => {
+        await setDoc(doc(ctx.firestore(), "users/c1"), baseUser);
+      });
+      const asCustomer = testEnv.authenticatedContext("c1").firestore();
+      await assertFails(updateDoc(doc(asCustomer, "users/c1"), { phone: "999" }));
+      await assertFails(updateDoc(doc(asCustomer, "users/c1"), { phone: "abcdefghij" }));
+      await assertSucceeds(updateDoc(doc(asCustomer, "users/c1"), { phone: "9123456789" }));
+    });
+
+    it("lets a profile that already holds an odd phone keep updating other fields", async () => {
+      await testEnv.withSecurityRulesDisabled(async (ctx) => {
+        await setDoc(doc(ctx.firestore(), "users/c1"), { ...baseUser, phone: "old-format" });
+      });
+      const asCustomer = testEnv.authenticatedContext("c1").firestore();
+      await assertSucceeds(updateDoc(doc(asCustomer, "users/c1"), { name: "New Name" }));
+    });
+  });
+
   describe("user document size caps", () => {
     it("rejects an oversized cart and accepts a normal one", async () => {
       await testEnv.withSecurityRulesDisabled(async (ctx) => {

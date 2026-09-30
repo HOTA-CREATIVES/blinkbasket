@@ -115,6 +115,11 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
       return;
     }
 
+    if (!authProvider.isEmailVerified) {
+      _showSnackBar('Verify your email before placing an order. You can resend the link from the home screen.');
+      return;
+    }
+
     if (!_formKey.currentState!.validate()) {
       _showSnackBar('Please complete the delivery address before placing order.');
       return;

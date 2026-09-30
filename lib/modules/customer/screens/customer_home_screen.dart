@@ -3,6 +3,7 @@ import 'package:provider/provider.dart';
 import '../../../core/design/app_tokens.dart';
 import '../../../core/design/widgets/banner_carousel.dart';
 import '../../../core/design/widgets/category_icon_rail.dart';
+import '../../../core/design/widgets/email_verification_banner.dart';
 import '../../../core/design/widgets/empty_state.dart';
 import '../../../core/design/widgets/floating_navbar.dart';
 import '../../../core/design/widgets/product_card.dart';
@@ -316,6 +317,7 @@ class _CustomerHomeScreenState extends State<CustomerHomeScreen> {
         SliverToBoxAdapter(
           child: Column(
             children: [
+              const EmailVerificationBanner(),
               StreamBuilder<AppConfig>(
                 stream: _configStream,
                 builder: (context, snapshot) {

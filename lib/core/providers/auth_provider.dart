@@ -146,6 +146,37 @@ class AuthProvider extends ChangeNotifier {
     return false;
   }
 
+  /// Whether the signed-in account has verified its email (see
+  /// [AuthRepository.isEmailVerified]).
+  bool get isEmailVerified => _authRepository.isEmailVerified;
+
+  bool _isSendingVerification = false;
+  bool _isCheckingVerification = false;
+  bool get isSendingVerification => _isSendingVerification;
+  bool get isCheckingVerification => _isCheckingVerification;
+
+  /// Sends the verification link. Returns null on success, else a message.
+  Future<String?> resendVerificationEmail() async {
+    if (_isSendingVerification) return null;
+    _isSendingVerification = true;
+    notifyListeners();
+    final error = await _authRepository.sendEmailVerification();
+    _isSendingVerification = false;
+    notifyListeners();
+    return error;
+  }
+
+  /// Re-checks verification after the user taps the emailed link.
+  Future<bool> refreshEmailVerified() async {
+    if (_isCheckingVerification) return isEmailVerified;
+    _isCheckingVerification = true;
+    notifyListeners();
+    final verified = await _authRepository.refreshEmailVerification();
+    _isCheckingVerification = false;
+    notifyListeners();
+    return verified;
+  }
+
   Future<bool> sendPasswordReset(String email) async {
     _setLoading(true);
     _errorMessage = null;

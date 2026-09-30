@@ -212,6 +212,18 @@ function isValidCoordinate(lat: number, lng: number): boolean {
   return Number.isFinite(lat) && Number.isFinite(lng) && Math.abs(lat) <= 90 && Math.abs(lng) <= 180;
 }
 
+/**
+ * Canonical 10-digit Indian mobile number from what a profile may hold
+ * ("9876543210", "+91 98765 43210", "09876543210"), or null when it isn't one.
+ * A rider must be able to call this number, so an order without a usable one
+ * is refused rather than dispatched.
+ */
+function normalizeIndianMobile(raw: unknown): string | null {
+  const compact = String(raw ?? "").replace(/[\s-]/g, "");
+  const match = compact.match(/^(?:\+?91|0)?([6-9]\d{9})$/);
+  return match ? match[1] : null;
+}
+
 /** Constant-time string comparison (avoids leaking OTP digits via timing). */
 function safeEqual(a: string, b: string): boolean {
   const ab = Buffer.from(a);
@@ -481,6 +493,15 @@ export const placeOrder = onCall({ region: REGION, enforceAppCheck: process.env.
   }
   const configSnap = await db.collection("config").doc("app").get();
   const config = configSnap.exists ? (configSnap.data() as FirebaseFirestore.DocumentData) : {};
+  // Identity gate: email/password accounts must have proved they own the
+  // address (Google accounts arrive verified). Admins can switch this off with
+  // config.requireVerifiedEmail=false, e.g. while an email provider is down.
+  if (config.requireVerifiedEmail !== false && request.auth?.token?.email_verified !== true) {
+    throw new HttpsError(
+      "failed-precondition",
+      "Verify your email address before placing an order. Check your inbox for the verification link."
+    );
+  }
   const resolved = resolveDeliveryZone(latitude, longitude, deliveryZonesFromConfig(config));
   if (!resolved.zone) {
     throw new HttpsError(
@@ -519,6 +540,17 @@ export const placeOrder = onCall({ region: REGION, enforceAppCheck: process.env.
   const user = userSnap.data() as FirebaseFirestore.DocumentData;
   if (user.isActive === false) {
     throw new HttpsError("permission-denied", "Your account is deactivated. Contact support.");
+  }
+  const customerName = String(user.name ?? "").trim();
+  if (!customerName) {
+    throw new HttpsError("failed-precondition", "Add your name to your profile before ordering.");
+  }
+  const customerMobile = normalizeIndianMobile(user.phone);
+  if (!customerMobile) {
+    throw new HttpsError(
+      "failed-precondition",
+      "Add a valid 10-digit mobile number to your profile before ordering."
+    );
   }
 
   if (config.storeOpen === false) {
@@ -657,8 +689,9 @@ export const placeOrder = onCall({ region: REGION, enforceAppCheck: process.env.
     tx.set(lockRef, { orderId: orderRef.id, updatedAt: now });
     tx.set(orderRef, {
       customerId: uid,
-      customerName: String(user.name ?? ""),
-      customerPhone: String(user.phone ?? ""),
+      customerName,
+      // Always +91-prefixed so riders can call or WhatsApp it as stored.
+      customerPhone: `+91${customerMobile}`,
       deliveryAddress,
       deliveryInstructions: deliveryInstructions || null,
       // Derived from the pinned coordinates (not the profile's village) so a

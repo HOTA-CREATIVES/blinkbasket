@@ -39,7 +39,11 @@ async function seedConfig(overrides: Record<string, unknown> = {}) {
   });
 }
 
-function order(uid: string, extra: Record<string, unknown> = {}) {
+function order(
+  uid: string,
+  extra: Record<string, unknown> = {},
+  tokenOverrides: Record<string, unknown> = {}
+) {
   return callableRequest(
     {
       items: [{ productId: "prod1", quantity: 1 }],
@@ -47,7 +51,8 @@ function order(uid: string, extra: Record<string, unknown> = {}) {
       ...PIN,
       ...extra,
     },
-    uid
+    uid,
+    { email_verified: true, ...tokenOverrides }
   );
 }
 
@@ -299,6 +304,68 @@ describe("placeOrder", () => {
         callableRequest({ items: [{ productId: "prod1", quantity: 1 }], deliveryAddress: "Addr" }, null)
       )
     ).rejects.toThrow(/Sign in/);
+  });
+
+  describe("identity checks", () => {
+    beforeEach(async () => {
+      await seedProduct("prod1");
+    });
+
+    it("rejects an email/password account that hasn't verified its email", async () => {
+      await seedUser("cust1");
+      await seedConfig();
+      await expect(
+        placeOrder.run(order("cust1", {}, { email_verified: false }))
+      ).rejects.toThrow(/Verify your email/);
+      const productSnap = await db.collection("products").doc("prod1").get();
+      expect(productSnap.data()?.reservedStock).toBe(0);
+    });
+
+    it("rejects a token that doesn't carry email_verified at all", async () => {
+      await seedUser("cust1");
+      await seedConfig();
+      await expect(
+        placeOrder.run(order("cust1", {}, { email_verified: undefined }))
+      ).rejects.toThrow(/Verify your email/);
+    });
+
+    it("lets an admin turn the verification requirement off", async () => {
+      await seedUser("cust1");
+      await seedConfig({ requireVerifiedEmail: false });
+      const result = await placeOrder.run(order("cust1", {}, { email_verified: false }));
+      expect(result.orderId).toBeTruthy();
+    });
+
+    it.each(["", "12345", "98765", "5876543210", "98765abcde", "98765432101"])(
+      "refuses to dispatch an order whose profile phone is unusable (%p)",
+      async (phone) => {
+        await seedUser("cust1", { phone });
+        await seedConfig();
+        await expect(placeOrder.run(order("cust1"))).rejects.toThrow(/valid 10-digit mobile/);
+        const productSnap = await db.collection("products").doc("prod1").get();
+        expect(productSnap.data()?.reservedStock).toBe(0);
+      }
+    );
+
+    it.each([
+      ["9876543210", "+919876543210"],
+      ["+91 98765 43210", "+919876543210"],
+      ["+919876543210", "+919876543210"],
+      ["09876543210", "+919876543210"],
+      ["98765-43210", "+919876543210"],
+    ])("stores %p as the canonical %p on the order", async (phone, stored) => {
+      await seedUser("cust1", { phone });
+      await seedConfig();
+      const result = await placeOrder.run(order("cust1"));
+      const orderSnap = await db.collection("orders").doc(result.orderId).get();
+      expect(orderSnap.data()?.customerPhone).toBe(stored);
+    });
+
+    it("refuses an order when the profile has no name", async () => {
+      await seedUser("cust1", { name: "  " });
+      await seedConfig();
+      await expect(placeOrder.run(order("cust1"))).rejects.toThrow(/Add your name/);
+    });
   });
 
   describe("delivery location", () => {

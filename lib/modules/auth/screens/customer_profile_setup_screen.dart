@@ -9,6 +9,7 @@ import '../../../core/providers/auth_provider.dart';
 import '../../../core/providers/config_provider.dart';
 import '../../../core/services/location_service.dart';
 import '../../../core/utils/customer_helper.dart';
+import '../../../core/utils/phone.dart';
 import '../widgets/custom_button.dart';
 import '../widgets/village_dropdown.dart';
 
@@ -235,7 +236,7 @@ class _CustomerProfileSetupScreenState extends State<CustomerProfileSetupScreen>
 
     final success = await authProvider.setupCustomerProfile(
       name: _nameController.text.trim(),
-      phone: _phoneController.text.trim(),
+      phone: normalizeIndianMobile(_phoneController.text) ?? _phoneController.text.trim(),
       village: village,
       mandal: mandal,
       district: district,
@@ -349,13 +350,7 @@ class _CustomerProfileSetupScreenState extends State<CustomerProfileSetupScreen>
               border: OutlineInputBorder(borderRadius: BorderRadius.circular(16)),
               hintText: 'e.g. 9876543210',
             ),
-            validator: (val) {
-              if (val == null || val.trim().isEmpty) return 'Please enter mobile number';
-              if (!RegExp(r'^[6-9][0-9]{9}$').hasMatch(val.trim())) {
-                return 'Enter valid 10-digit mobile number';
-              }
-              return null;
-            },
+            validator: validateIndianMobile,
           ),
           const SizedBox(height: 36),
 

@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:flutter/foundation.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:cloud_functions/cloud_functions.dart';
@@ -90,6 +91,11 @@ class FirebaseAuthRepository implements AuthRepository {
         return AuthResult(isSuccess: false, errorMessage: "Failed to create account.");
       }
 
+      // Best effort: the user can resend from the home screen banner.
+      unawaited(user.sendEmailVerification().catchError((Object e) {
+        debugPrint('registerCustomer: verification email not sent: $e');
+      }));
+
       // Seed the matching Firestore customer stub immediately so a user
       // who closes the app mid-onboarding doesn't leave an orphan Auth
       // account.
@@ -116,6 +122,47 @@ class FirebaseAuthRepository implements AuthRepository {
       );
     } catch (e) {
       return AuthResult(isSuccess: false, errorMessage: e.toString());
+    }
+  }
+
+  @override
+  bool get isEmailVerified => _auth.currentUser?.emailVerified ?? false;
+
+  @override
+  Future<String?> sendEmailVerification() async {
+    final user = _auth.currentUser;
+    if (user == null) return 'Sign in again to verify your email.';
+    try {
+      await user.sendEmailVerification();
+      return null;
+    } on FirebaseAuthException catch (e) {
+      debugPrint('sendEmailVerification failed: ${e.code}');
+      if (e.code == 'too-many-requests') {
+        return 'Too many requests. Wait a few minutes and try again.';
+      }
+      if (e.code == 'network-request-failed') {
+        return 'No internet connection. Check your network and try again.';
+      }
+      return "Couldn't send the verification email. Please try again.";
+    } catch (e) {
+      debugPrint('sendEmailVerification unexpected: $e');
+      return "Couldn't send the verification email. Please try again.";
+    }
+  }
+
+  @override
+  Future<bool> refreshEmailVerification() async {
+    try {
+      final user = _auth.currentUser;
+      if (user == null) return false;
+      await user.reload();
+      // The Cloud Functions read email_verified from the ID token, which only
+      // updates on refresh.
+      await _auth.currentUser?.getIdToken(true);
+      return _auth.currentUser?.emailVerified ?? false;
+    } catch (e) {
+      debugPrint('refreshEmailVerification failed: $e');
+      return _auth.currentUser?.emailVerified ?? false;
     }
   }
 
