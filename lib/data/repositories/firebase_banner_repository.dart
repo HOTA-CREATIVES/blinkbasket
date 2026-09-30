@@ -2,6 +2,7 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import '../../domain/entities/banner_item.dart';
 import '../../domain/repositories/banner_repository.dart';
 import '../models/banner_dto.dart';
+import '../../core/utils/app_exception.dart';
 
 class FirebaseBannerRepository implements BannerRepository {
   final FirebaseFirestore _db = FirebaseFirestore.instance;
@@ -39,7 +40,7 @@ class FirebaseBannerRepository implements BannerRepository {
       final dto = BannerItemDto.fromEntity(b);
       await _db.collection('banners').add(dto.toMap());
     } catch (e) {
-      throw Exception("Failed to add banner: $e");
+      throw AppException.from(e, action: 'add banner');
     }
   }
 
@@ -49,7 +50,7 @@ class FirebaseBannerRepository implements BannerRepository {
       final dto = BannerItemDto.fromEntity(b);
       await _db.collection('banners').doc(b.id).update(dto.toMap());
     } catch (e) {
-      throw Exception("Failed to update banner: $e");
+      throw AppException.from(e, action: 'update banner');
     }
   }
 
@@ -58,7 +59,7 @@ class FirebaseBannerRepository implements BannerRepository {
     try {
       await _db.collection('banners').doc(id).delete();
     } catch (e) {
-      throw Exception("Failed to delete banner: $e");
+      throw AppException.from(e, action: 'delete banner');
     }
   }
 }

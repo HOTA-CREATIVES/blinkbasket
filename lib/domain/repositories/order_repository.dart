@@ -1,4 +1,6 @@
 import '../entities/order.dart';
+import '../entities/delivery_otp.dart';
+import '../entities/rider_location.dart';
 import '../../core/models/user_model.dart';
 
 /// Result of a server-side order placement via the placeOrder Cloud Function.
@@ -6,16 +8,24 @@ class PlaceOrderResult {
   final bool isSuccess;
   final String? orderId;
   final String? otp;
+
+  /// Server-computed grand total (subtotal + delivery fee). The client's own
+  /// cart total is only a preview; show this one once the order exists.
+  final double? totalAmount;
   final String? errorMessage;
 
-  const PlaceOrderResult.success({required this.orderId, required this.otp})
-      : isSuccess = true,
+  const PlaceOrderResult.success({
+    required this.orderId,
+    required this.otp,
+    this.totalAmount,
+  })  : isSuccess = true,
         errorMessage = null;
 
   const PlaceOrderResult.failure(this.errorMessage)
       : isSuccess = false,
         orderId = null,
-        otp = null;
+        otp = null,
+        totalAmount = null;
 }
 
 abstract class OrderRepository {
@@ -30,17 +40,23 @@ abstract class OrderRepository {
   /// Blinkit-style broadcast feed: pending orders not yet claimed by any
   /// rider. Any on-duty rider may stream and accept from this — visibility
   /// isn't restricted to their village (see firestore.rules), only the
-  /// push-notification priority is.
+  /// push-notification priority is. Backed by the PII-free /orderOffers copy:
+  /// the returned orders carry a first name and village but no phone, street
+  /// address or GPS pin. The full order is readable only after acceptOrder.
   Stream<List<Order>> streamIncomingOffers({int limit = 30});
 
   /// Places an order through the placeOrder Cloud Function. The server
   /// re-prices items, checks stock, and generates the delivery OTP.
+  ///
+  /// [requestId] makes the call idempotent: retrying with the same id after a
+  /// lost response returns the order that was already created.
   Future<PlaceOrderResult> placeOrder({
     required List<OrderItem> items,
     required String deliveryAddress,
     String? deliveryInstructions,
     double? latitude,
     double? longitude,
+    String? requestId,
   });
 
   /// Cancels a customer order while in 'pending' or 'assigned' state.
@@ -48,15 +64,32 @@ abstract class OrderRepository {
   Future<String?> cancelOrder(String orderId, {String? reason});
 
   /// Verifies the customer's delivery OTP via the verifyDeliveryOtp Cloud
-  /// Function. Returns null on success, or a user-readable error message.
-  Future<String?> verifyDeliveryOtp(String orderId, String otp);
+  /// Function and records the cash the rider confirms collecting
+  /// ([collectedAmount] must equal the order total). Returns null on success,
+  /// or a user-readable error message.
+  ///
+  /// [location] is where the rider is handing over, recorded as proof of
+  /// delivery (optional: a rider without a GPS fix can still deliver).
+  Future<String?> verifyDeliveryOtp(String orderId, String otp, double collectedAmount,
+      {RiderLocation? location});
 
   /// Reads the delivery OTP for one of the customer's own orders.
   /// Only callable by the ordering customer (Firestore rules enforce this).
   /// Riders must get the OTP verbally from the customer.
   Future<String?> getOrderOtp(String orderId);
 
-  Future<void> updateOrderStatus(String orderId, String status);
+  /// The code and its expiry for one of the customer's own orders, or null
+  /// when it can't be read (offline, or the order has no code).
+  Future<DeliveryOtp?> getDeliveryOtp(String orderId);
+
+  /// Replaces the delivery code (shared by mistake, or expired). Returns the
+  /// new code, or throws an [AppException] with a message for the customer.
+  Future<DeliveryOtp> regenerateDeliveryOtp(String orderId);
+
+  /// Moves the rider's order to [nextStatus] through the advanceOrderStatus
+  /// callable, recording when and where. Returns null on success, or a
+  /// message for the rider.
+  Future<String?> advanceOrderStatus(String orderId, String nextStatus, {RiderLocation? location});
 
   /// Customer-submitted 1-5 star rating for a delivered order. Write-once,
   /// enforced by Firestore rules (rejected if the order isn't 'delivered'
@@ -69,6 +102,13 @@ abstract class OrderRepository {
   /// Returns null on success, or a user-readable error message (e.g. if
   /// another rider already accepted it first).
   Future<String?> acceptOrder(String orderId);
+
+  /// Rider declines an offer. Persisted server-side (per rider) so it stays
+  /// hidden across restarts. Returns null on success or a readable error.
+  Future<String?> rejectOrderOffer(String orderId);
+
+  /// Ids of the offers this rider has declined.
+  Stream<Set<String>> streamRejectedOfferIds(String riderId);
 
   /// Rider reports that an assigned/picked-up/out-for-delivery order could
   /// not be handed over (customer unreachable, refused COD, bad address).

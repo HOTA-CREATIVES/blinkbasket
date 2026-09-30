@@ -19,6 +19,7 @@ import 'widgets/metric_card.dart';
 import 'widgets/order_actions_sheet.dart';
 import 'widgets/edit_rider_sheet.dart';
 import 'widgets/product_ledger_sheet.dart';
+import '../../../core/utils/app_exception.dart';
 
 class AdminHomeScreen extends StatefulWidget {
   const AdminHomeScreen({super.key});
@@ -2005,7 +2006,7 @@ class _AdminHomeScreenState extends State<AdminHomeScreen> with WidgetsBindingOb
                 if (!context.mounted) return;
                 ScaffoldMessenger.of(context).showSnackBar(
                   SnackBar(
-                    content: Text('Failed to delete rider: $e'),
+                    content: Text(userMessageFor(e, fallback: "Couldn't delete the rider. Please try again.")),
                     backgroundColor: Theme.of(context).colorScheme.error,
                     behavior: SnackBarBehavior.floating,
                   ),

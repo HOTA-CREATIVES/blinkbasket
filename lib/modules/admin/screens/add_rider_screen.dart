@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../../../core/design/app_tokens.dart';
 import '../../../core/providers/order_provider.dart';
+import '../../../core/utils/app_exception.dart';
 
 class AddRiderScreen extends StatefulWidget {
   const AddRiderScreen({super.key});
@@ -157,7 +158,7 @@ class _AddRiderScreenState extends State<AddRiderScreen> {
         Navigator.pop(context);
       }
     } catch (e) {
-      _showSnackBar('Failed to whitelist rider: $e');
+      _showSnackBar(userMessageFor(e, fallback: "Couldn't add the rider. Please try again."));
     } finally {
       if (mounted) {
         setState(() {

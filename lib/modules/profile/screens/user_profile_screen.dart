@@ -11,6 +11,7 @@ import '../../../core/providers/profile_provider.dart';
 import '../../../domain/entities/order.dart';
 import '../widgets/edit_profile_dialog.dart';
 import '../../../core/utils/route_generator.dart';
+import '../../../core/utils/app_exception.dart';
 
 class UserProfileScreen extends StatefulWidget {
   final bool isEmbedded;
@@ -61,7 +62,7 @@ class _UserProfileScreenState extends State<UserProfileScreen> {
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text("Error selecting image: $e"), backgroundColor: AppTokens.statusCancelled),
+          SnackBar(content: Text(userMessageFor(e, fallback: "Couldn't open the photo library.")), backgroundColor: AppTokens.statusCancelled),
         );
       }
     }

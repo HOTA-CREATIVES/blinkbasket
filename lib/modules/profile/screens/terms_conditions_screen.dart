@@ -5,7 +5,7 @@ import '../../../core/design/widgets/legal_document_view.dart';
 import '../../../core/providers/config_provider.dart';
 import '../../../domain/entities/app_config.dart';
 
-/// Terms & Conditions screen for JC Mart Quick-Commerce
+/// Terms & Conditions screen for J C Mart Quick-Commerce
 class TermsConditionsScreen extends StatelessWidget {
   const TermsConditionsScreen({super.key});
 

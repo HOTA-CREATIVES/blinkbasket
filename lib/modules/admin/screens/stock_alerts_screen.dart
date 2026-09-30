@@ -7,6 +7,7 @@ import '../../../core/providers/product_provider.dart';
 import '../../../core/utils/route_generator.dart';
 import '../../../domain/entities/product.dart' as ent;
 import 'widgets/product_ledger_sheet.dart';
+import '../../../core/utils/app_exception.dart';
 
 enum _AlertFilter { out, low, all }
 
@@ -64,10 +65,10 @@ class _StockAlertsScreenState extends State<StockAlertsScreen> {
             return const Center(child: CircularProgressIndicator(color: AppTokens.primary));
           }
           if (snapshot.hasError) {
-            return const EmptyState(
-              icon: Icons.error_outline_rounded,
+            return EmptyState.error(
               title: "Couldn't load products",
-              message: 'Check your connection and try again.',
+              message: userMessageFor(snapshot.error),
+              onAction: context.read<ProductProvider>().retryProducts,
             );
           }
 

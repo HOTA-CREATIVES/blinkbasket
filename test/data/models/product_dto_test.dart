@@ -1,3 +1,4 @@
+import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:hypermart/data/models/product_dto.dart';
 
@@ -190,6 +191,27 @@ void main() {
       expect(map.containsKey('brand'), false);
       expect(map.containsKey('rating'), false);
       expect(map.containsKey('reviewCount'), false);
+    });
+  });
+
+  group('ProductDto update maps', () {
+    ProductDto dto({double? discountedPrice}) => ProductDto.fromMap({
+          'name': 'Milk',
+          'price': 30.0,
+          if (discountedPrice != null) 'discountedPrice': discountedPrice,
+          'stock': 5,
+        }, 'p1');
+
+    test('keep a discount when one is set', () {
+      expect(dto(discountedPrice: 25).toUpdateMapWithoutStock()['discountedPrice'], 25.0);
+      expect(dto(discountedPrice: 25).toUpdateMap()['discountedPrice'], 25.0);
+    });
+
+    test('delete the stored discount when an edit clears it', () {
+      final withoutStock = dto().toUpdateMapWithoutStock()['discountedPrice'];
+      final full = dto().toUpdateMap()['discountedPrice'];
+      expect(withoutStock, isA<FieldValue>());
+      expect(full, isA<FieldValue>());
     });
   });
 }

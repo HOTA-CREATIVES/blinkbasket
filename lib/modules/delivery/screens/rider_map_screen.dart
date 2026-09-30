@@ -8,6 +8,9 @@ import '../../../core/providers/auth_provider.dart';
 import '../../../core/providers/order_provider.dart';
 import '../../../core/utils/route_generator.dart';
 import '../../../domain/entities/order.dart';
+import '../../../core/utils/app_exception.dart';
+import '../../../core/design/widgets/empty_state.dart';
+import '../../../core/utils/money.dart';
 
 class RiderMapScreen extends StatefulWidget {
   final bool isEmbedded;
@@ -73,15 +76,10 @@ class _RiderMapScreenState extends State<RiderMapScreen> {
             return Center(child: CircularProgressIndicator(color: scheme.primary));
           }
           if (snapshot.hasError) {
-            return Center(
-              child: Padding(
-                padding: const EdgeInsets.all(AppTokens.s20),
-                child: Text(
-                  'Error loading active deliveries on map:\n${snapshot.error}',
-                  textAlign: TextAlign.center,
-                  style: TextStyle(color: scheme.error),
-                ),
-              ),
+            return EmptyState.error(
+              title: "Couldn't load your deliveries",
+              message: userMessageFor(snapshot.error),
+              onAction: () => orderProvider.retryDeliveryOrders(user.uid),
             );
           }
 
@@ -194,7 +192,7 @@ class _RiderMapScreenState extends State<RiderMapScreen> {
                               const Icon(Icons.currency_rupee_rounded, size: 16, color: AppTokens.statusDelivered),
                               const SizedBox(width: 6),
                               Text(
-                                'Collect: ₹${_selectedOrder!.totalAmount.toStringAsFixed(2)}',
+                                'Collect: ${formatRupees(_selectedOrder!.totalAmount)}',
                                 style: const TextStyle(
                                   color: AppTokens.statusDelivered,
                                   fontWeight: FontWeight.bold,

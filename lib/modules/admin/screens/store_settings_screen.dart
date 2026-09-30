@@ -3,6 +3,7 @@ import 'package:provider/provider.dart';
 import '../../../core/design/app_tokens.dart';
 import '../../../core/providers/config_provider.dart';
 import '../../../domain/entities/app_config.dart';
+import '../../../core/utils/app_exception.dart';
 
 class StoreSettingsScreen extends StatefulWidget {
   const StoreSettingsScreen({super.key});
@@ -112,7 +113,7 @@ class _StoreSettingsScreenState extends State<StoreSettingsScreen> {
         final error = Provider.of<ConfigProvider>(context, listen: false).errorMessage;
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text('Failed to update settings: $error'),
+            content: Text(error ?? "Couldn't update settings. Please try again."),
             backgroundColor: AppTokens.statusCancelled,
             behavior: SnackBarBehavior.floating,
           ),
@@ -122,7 +123,7 @@ class _StoreSettingsScreenState extends State<StoreSettingsScreen> {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text('Failed to update settings: $e'),
+            content: Text(userMessageFor(e, fallback: "Couldn't update settings. Please try again.")),
             backgroundColor: AppTokens.statusCancelled,
             behavior: SnackBarBehavior.floating,
           ),

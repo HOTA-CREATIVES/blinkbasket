@@ -1,10 +1,13 @@
 import 'dart:async';
 import 'package:cloud_firestore/cloud_firestore.dart' hide Order;
 import 'package:cloud_functions/cloud_functions.dart';
+import '../../domain/entities/delivery_otp.dart';
 import '../../domain/entities/order.dart';
+import '../../domain/entities/rider_location.dart';
 import '../../domain/repositories/order_repository.dart';
 import '../../core/models/user_model.dart';
 import '../models/order_dto.dart';
+import '../../core/utils/app_exception.dart';
 
 class FirebaseOrderRepository implements OrderRepository {
   final FirebaseFirestore _db = FirebaseFirestore.instance;
@@ -16,7 +19,7 @@ class FirebaseOrderRepository implements OrderRepository {
   Stream<Order> streamOrder(String orderId) {
     return _db.collection('orders').doc(orderId).snapshots().map((snapshot) {
       if (!snapshot.exists) {
-        throw Exception("Order not found: $orderId");
+        throw const AppException('Order not found.', code: 'not-found');
       }
       return OrderDto.fromMap(snapshot.data() ?? {}, snapshot.id);
     });
@@ -66,10 +69,11 @@ class FirebaseOrderRepository implements OrderRepository {
 
   @override
   Stream<List<Order>> streamIncomingOffers({int limit = 30}) {
+    // Riders may not read the full order until they accept it (it holds the
+    // customer's phone, address and GPS pin). /orderOffers is the PII-free
+    // copy the onOrderWritten trigger keeps for every unclaimed order.
     return _db
-        .collection('orders')
-        .where('status', isEqualTo: 'pending')
-        .where('deliveryBoyId', isEqualTo: null)
+        .collection('orderOffers')
         .orderBy('createdAt', descending: true)
         .limit(limit)
         .snapshots()
@@ -98,6 +102,7 @@ class FirebaseOrderRepository implements OrderRepository {
     String? deliveryInstructions,
     double? latitude,
     double? longitude,
+    String? requestId,
   }) async {
     try {
       final callable = _functions.httpsCallable('placeOrder');
@@ -113,11 +118,13 @@ class FirebaseOrderRepository implements OrderRepository {
           'deliveryInstructions': deliveryInstructions,
         if (latitude != null) 'latitude': latitude,
         if (longitude != null) 'longitude': longitude,
+        if (requestId != null && requestId.isNotEmpty) 'requestId': requestId,
       });
       final data = Map<String, dynamic>.from(response.data as Map);
       return PlaceOrderResult.success(
         orderId: data['orderId'] as String?,
         otp: data['otp'] as String?,
+        totalAmount: (data['totalAmount'] as num?)?.toDouble(),
       );
     } on FirebaseFunctionsException catch (e) {
       return PlaceOrderResult.failure(
@@ -139,16 +146,22 @@ class FirebaseOrderRepository implements OrderRepository {
       return null;
     } on FirebaseFunctionsException catch (e) {
       return e.message ?? 'Failed to cancel order (${e.code}). Please try again.';
-    } catch (e) {
-      return 'Failed to cancel order ($e). Check your connection and try again.';
+    } catch (_) {
+      return 'Failed to cancel order. Check your connection and try again.';
     }
   }
 
   @override
-  Future<String?> verifyDeliveryOtp(String orderId, String otp) async {
+  Future<String?> verifyDeliveryOtp(String orderId, String otp, double collectedAmount,
+      {RiderLocation? location}) async {
     try {
       final callable = _functions.httpsCallable('verifyDeliveryOtp');
-      await callable.call<dynamic>({'orderId': orderId, 'otp': otp});
+      await callable.call<dynamic>({
+        'orderId': orderId,
+        'otp': otp,
+        'collectedAmount': collectedAmount,
+        if (location != null) 'location': location.toMap(),
+      });
       return null;
     } on FirebaseFunctionsException catch (e) {
       return e.message ?? 'OTP verification failed. Please try again.';
@@ -173,14 +186,69 @@ class FirebaseOrderRepository implements OrderRepository {
   }
 
   @override
-  Future<void> updateOrderStatus(String orderId, String status) async {
+  Future<String?> advanceOrderStatus(String orderId, String nextStatus,
+      {RiderLocation? location}) async {
     try {
-      await _db.collection('orders').doc(orderId).update({
-        'status': status,
-        'updatedAt': FieldValue.serverTimestamp(),
-      });
+      await _functions
+          .httpsCallable('advanceOrderStatus')
+          .call<dynamic>({
+            'orderId': orderId,
+            'status': nextStatus,
+            if (location != null) 'location': location.toMap(),
+          })
+          .timeout(const Duration(seconds: 20));
+      return null;
+    } on TimeoutException {
+      return 'Request timed out. Check your connection and try again.';
+    } on FirebaseFunctionsException catch (e) {
+      return userMessageFor(e,
+          fallback: "Couldn't update this order. Go back and check its latest status.");
+    } catch (_) {
+      return "Couldn't update this order. Check your connection and try again.";
+    }
+  }
+
+  @override
+  Future<DeliveryOtp?> getDeliveryOtp(String orderId) async {
+    try {
+      final doc = await _db
+          .collection('orders')
+          .doc(orderId)
+          .collection('private')
+          .doc('delivery')
+          .get();
+      final data = doc.data();
+      final code = data?['otp'];
+      if (code is! String || code.isEmpty) return null;
+      return DeliveryOtp(
+        code: code,
+        expiresAt: (data?['expiresAt'] as Timestamp?)?.toDate(),
+      );
+    } catch (_) {
+      return null;
+    }
+  }
+
+  @override
+  Future<DeliveryOtp> regenerateDeliveryOtp(String orderId) async {
+    try {
+      final result = await _functions
+          .httpsCallable('regenerateDeliveryOtp')
+          .call<dynamic>({'orderId': orderId})
+          .timeout(const Duration(seconds: 20));
+      final data = Map<String, dynamic>.from(result.data as Map);
+      final expiresAtMs = data['expiresAtMs'];
+      return DeliveryOtp(
+        code: data['otp'] as String,
+        expiresAt: expiresAtMs is num
+            ? DateTime.fromMillisecondsSinceEpoch(expiresAtMs.toInt())
+            : null,
+      );
     } catch (e) {
-      throw Exception("Failed to update order status: $e");
+      throw AppException(
+        userMessageFor(e, fallback: "Couldn't get a new code. Please try again."),
+        code: e is FirebaseFunctionsException ? e.code : null,
+      );
     }
   }
 
@@ -194,7 +262,7 @@ class FirebaseOrderRepository implements OrderRepository {
         'updatedAt': FieldValue.serverTimestamp(),
       });
     } catch (e) {
-      throw Exception("Failed to submit order rating: $e");
+      throw AppException.from(e, action: 'submit order rating');
     }
   }
 
@@ -217,6 +285,32 @@ class FirebaseOrderRepository implements OrderRepository {
     } catch (_) {
       return 'Failed to accept order. Check your connection and try again.';
     }
+  }
+
+  @override
+  Future<String?> rejectOrderOffer(String orderId) async {
+    try {
+      await _functions
+          .httpsCallable('rejectOrderOffer')
+          .call<dynamic>({'orderId': orderId}).timeout(const Duration(seconds: 20));
+      return null;
+    } on TimeoutException {
+      return 'Request timed out. Check your connection and try again.';
+    } on FirebaseFunctionsException catch (e) {
+      return e.message ?? 'Could not reject the offer.';
+    } catch (_) {
+      return 'Could not reject the offer. Check your connection and try again.';
+    }
+  }
+
+  @override
+  Stream<Set<String>> streamRejectedOfferIds(String riderId) {
+    return _db
+        .collection('deliveryBoys')
+        .doc(riderId)
+        .collection('rejectedOffers')
+        .snapshots()
+        .map((snapshot) => {for (final doc in snapshot.docs) doc.id});
   }
 
   @override
@@ -312,7 +406,7 @@ class FirebaseOrderRepository implements OrderRepository {
         'isActive': isActive,
       }, SetOptions(merge: true));
     } catch (e) {
-      throw Exception("Failed to update rider active status: $e");
+      throw AppException.from(e, action: 'update rider active status');
     }
   }
 
@@ -325,7 +419,7 @@ class FirebaseOrderRepository implements OrderRepository {
         'onDuty': onDuty,
       }, SetOptions(merge: true));
     } catch (e) {
-      throw Exception("Failed to update rider duty status: $e");
+      throw AppException.from(e, action: 'update rider duty status');
     }
   }
 
@@ -345,7 +439,7 @@ class FirebaseOrderRepository implements OrderRepository {
       });
       return result.data['temporaryPassword'] as String;
     } catch (e) {
-      throw Exception("Failed to whitelist rider login: $e");
+      throw AppException.from(e, action: 'whitelist rider login');
     }
   }
 
@@ -370,7 +464,7 @@ class FirebaseOrderRepository implements OrderRepository {
         'updatedAt': FieldValue.serverTimestamp(),
       }, SetOptions(merge: true));
     } catch (e) {
-      throw Exception("Failed to update rider details: $e");
+      throw AppException.from(e, action: 'update rider details');
     }
   }
 
@@ -383,7 +477,7 @@ class FirebaseOrderRepository implements OrderRepository {
         'deletedAt': FieldValue.serverTimestamp(),
       }, SetOptions(merge: true));
     } catch (e) {
-      throw Exception("Failed to delete rider: $e");
+      throw AppException.from(e, action: 'delete rider');
     }
   }
 }

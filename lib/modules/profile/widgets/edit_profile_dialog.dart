@@ -3,6 +3,7 @@ import 'package:provider/provider.dart';
 import '../../../core/design/app_tokens.dart';
 import '../../../core/models/user_model.dart';
 import '../../../core/providers/profile_provider.dart';
+import '../../../core/utils/phone.dart';
 
 class EditProfileDialog extends StatefulWidget {
   final UserModel user;
@@ -51,7 +52,7 @@ class _EditProfileDialogState extends State<EditProfileDialog> {
     
     final success = await profileProvider.updateProfileDetails(
       name: _nameController.text.trim(),
-      phone: _phoneController.text.trim(),
+      phone: normalizeIndianMobile(_phoneController.text) ?? _phoneController.text.trim(),
       village: _villageController.text.trim(),
       vehicleDetails: widget.user.role == 'delivery' ? _vehicleDetailsController.text.trim() : null,
       vehicleNo: widget.user.role == 'delivery' ? _vehicleNoController.text.trim().toUpperCase() : null,
@@ -180,15 +181,7 @@ class _EditProfileDialogState extends State<EditProfileDialog> {
                     borderSide: BorderSide(color: scheme.error, width: 2),
                   ),
                 ),
-                validator: (value) {
-                  if (value == null || value.trim().isEmpty) {
-                    return 'Please enter your mobile number';
-                  }
-                  if (value.trim().length < 10) {
-                    return 'Please enter a valid mobile number';
-                  }
-                  return null;
-                },
+                validator: validateIndianMobile,
               ),
               const SizedBox(height: AppTokens.s20),
 

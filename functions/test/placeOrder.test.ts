@@ -39,7 +39,11 @@ async function seedConfig(overrides: Record<string, unknown> = {}) {
   });
 }
 
-function order(uid: string, extra: Record<string, unknown> = {}) {
+function order(
+  uid: string,
+  extra: Record<string, unknown> = {},
+  tokenOverrides: Record<string, unknown> = {}
+) {
   return callableRequest(
     {
       items: [{ productId: "prod1", quantity: 1 }],
@@ -47,7 +51,8 @@ function order(uid: string, extra: Record<string, unknown> = {}) {
       ...PIN,
       ...extra,
     },
-    uid
+    uid,
+    { email_verified: true, ...tokenOverrides }
   );
 }
 
@@ -91,6 +96,47 @@ describe("placeOrder", () => {
     const orderSnap = await db.collection("orders").doc(result.orderId).get();
     expect(orderSnap.data()?.status).toBe("pending");
     expect(orderSnap.data()?.items[0].price).toBe(50);
+  });
+
+  describe("idempotency (requestId)", () => {
+    it("returns the existing order on a retry instead of failing or double-reserving", async () => {
+      await seedUser("cust1");
+      await seedProduct("prod1", { price: 50, physicalStock: 10, availableStock: 10 });
+      await seedConfig();
+
+      const first = await placeOrder.run(order("cust1", { requestId: "req-abc-12345" }));
+      const retry = await placeOrder.run(order("cust1", { requestId: "req-abc-12345" }));
+
+      expect(retry.orderId).toBe(first.orderId);
+      expect(retry.otp).toBe(first.otp);
+      expect(retry.totalAmount).toBe(first.totalAmount);
+      expect(retry.deduplicated).toBe(true);
+
+      const orders = await db.collection("orders").where("customerId", "==", "cust1").get();
+      expect(orders.size).toBe(1);
+      const productSnap = await db.collection("products").doc("prod1").get();
+      expect(productSnap.data()?.reservedStock).toBe(1);
+    });
+
+    it("does not let a different customer collide on the same requestId", async () => {
+      await seedUser("cust1");
+      await seedUser("cust2");
+      await seedProduct("prod1", { price: 50, physicalStock: 10, availableStock: 10 });
+      await seedConfig();
+
+      const a = await placeOrder.run(order("cust1", { requestId: "req-abc-12345" }));
+      const b = await placeOrder.run(order("cust2", { requestId: "req-abc-12345" }));
+      expect(b.orderId).not.toBe(a.orderId);
+    });
+
+    it("rejects a malformed requestId", async () => {
+      await seedUser("cust1");
+      await seedProduct("prod1");
+      await seedConfig();
+      await expect(
+        placeOrder.run(order("cust1", { requestId: "bad id!" }))
+      ).rejects.toThrow(/Invalid request id/);
+    });
   });
 
   it("waives the delivery fee once the subtotal exceeds the free-delivery threshold", async () => {
@@ -137,6 +183,48 @@ describe("placeOrder", () => {
 
     const productSnap = await db.collection("products").doc("prod1").get();
     expect(productSnap.data()?.reservedStock).toBe(0);
+  });
+
+  it("rejects a product the admin switched off with isAvailable=false (what the app's flag writes)", async () => {
+    await seedUser("cust1");
+    await seedProduct("prod1", { isAvailable: false });
+    await seedConfig();
+
+    await expect(placeOrder.run(order("cust1"))).rejects.toThrow(/not currently available/);
+    const productSnap = await db.collection("products").doc("prod1").get();
+    expect(productSnap.data()?.reservedStock).toBe(0);
+  });
+
+  describe("discounted pricing", () => {
+    it("charges the discounted price the app displays and records the list price", async () => {
+      await seedUser("cust1");
+      await seedProduct("prod1", { price: 100, discountedPrice: 80, availableStock: 10 });
+      await seedConfig({ freeDeliveryAbove: 1000 });
+
+      const result = await placeOrder.run(
+        order("cust1", { items: [{ productId: "prod1", quantity: 2 }] })
+      );
+
+      expect(result.subtotal).toBe(160);
+      const orderSnap = await db.collection("orders").doc(result.orderId).get();
+      expect(orderSnap.data()?.items[0].price).toBe(80);
+      expect(orderSnap.data()?.items[0].listPrice).toBe(100);
+    });
+
+    it.each([
+      ["equal to the list price", 100],
+      ["above the list price", 150],
+      ["zero", 0],
+      ["negative", -5],
+      ["not a number", "80"],
+    ])("ignores a discount that is %s and charges the list price", async (_label, discountedPrice) => {
+      await seedUser("cust1");
+      await seedProduct("prod1", { price: 100, discountedPrice, availableStock: 10 });
+      await seedConfig({ freeDeliveryAbove: 1000 });
+
+      const result = await placeOrder.run(order("cust1"));
+      expect(result.subtotal).toBe(100);
+    });
   });
 
   it("rejects an inactive (deactivated) product", async () => {
@@ -218,6 +306,68 @@ describe("placeOrder", () => {
     ).rejects.toThrow(/Sign in/);
   });
 
+  describe("identity checks", () => {
+    beforeEach(async () => {
+      await seedProduct("prod1");
+    });
+
+    it("rejects an email/password account that hasn't verified its email", async () => {
+      await seedUser("cust1");
+      await seedConfig();
+      await expect(
+        placeOrder.run(order("cust1", {}, { email_verified: false }))
+      ).rejects.toThrow(/Verify your email/);
+      const productSnap = await db.collection("products").doc("prod1").get();
+      expect(productSnap.data()?.reservedStock).toBe(0);
+    });
+
+    it("rejects a token that doesn't carry email_verified at all", async () => {
+      await seedUser("cust1");
+      await seedConfig();
+      await expect(
+        placeOrder.run(order("cust1", {}, { email_verified: undefined }))
+      ).rejects.toThrow(/Verify your email/);
+    });
+
+    it("lets an admin turn the verification requirement off", async () => {
+      await seedUser("cust1");
+      await seedConfig({ requireVerifiedEmail: false });
+      const result = await placeOrder.run(order("cust1", {}, { email_verified: false }));
+      expect(result.orderId).toBeTruthy();
+    });
+
+    it.each(["", "12345", "98765", "5876543210", "98765abcde", "98765432101"])(
+      "refuses to dispatch an order whose profile phone is unusable (%p)",
+      async (phone) => {
+        await seedUser("cust1", { phone });
+        await seedConfig();
+        await expect(placeOrder.run(order("cust1"))).rejects.toThrow(/valid 10-digit mobile/);
+        const productSnap = await db.collection("products").doc("prod1").get();
+        expect(productSnap.data()?.reservedStock).toBe(0);
+      }
+    );
+
+    it.each([
+      ["9876543210", "+919876543210"],
+      ["+91 98765 43210", "+919876543210"],
+      ["+919876543210", "+919876543210"],
+      ["09876543210", "+919876543210"],
+      ["98765-43210", "+919876543210"],
+    ])("stores %p as the canonical %p on the order", async (phone, stored) => {
+      await seedUser("cust1", { phone });
+      await seedConfig();
+      const result = await placeOrder.run(order("cust1"));
+      const orderSnap = await db.collection("orders").doc(result.orderId).get();
+      expect(orderSnap.data()?.customerPhone).toBe(stored);
+    });
+
+    it("refuses an order when the profile has no name", async () => {
+      await seedUser("cust1", { name: "  " });
+      await seedConfig();
+      await expect(placeOrder.run(order("cust1"))).rejects.toThrow(/Add your name/);
+    });
+  });
+
   describe("delivery location", () => {
     beforeEach(async () => {
       await seedUser("cust1");
@@ -266,6 +416,50 @@ describe("placeOrder", () => {
     it("accepts delivery coordinates within the service radius", async () => {
       const result = await placeOrder.run(order("cust1", { latitude: 16.55, longitude: 81.52 }));
       expect(result.orderId).toBeTruthy();
+    });
+
+    describe("admin-configured service zones", () => {
+      // 25 km from Bhimavaram, i.e. outside the built-in 12 km village radius.
+      const FAR = { latitude: 16.77, longitude: 81.52 };
+      const zone = (over: Record<string, unknown> = {}) => ({
+        name: "Palakollu",
+        lat: 16.77,
+        lng: 81.53,
+        radiusKm: 5,
+        ...over,
+      });
+
+      it("accepts a pin inside an admin-added zone the built-in list doesn't cover", async () => {
+        await seedConfig({ serviceZones: [zone()] });
+        const result = await placeOrder.run(order("cust1", FAR));
+        const orderSnap = await db.collection("orders").doc(result.orderId).get();
+        expect(orderSnap.data()?.village).toBe("Palakollu");
+      });
+
+      it("uses the zone's own radius, rejecting a pin just outside it", async () => {
+        await seedConfig({ serviceZones: [zone({ radiusKm: 0.2 })] });
+        await expect(placeOrder.run(order("cust1", FAR))).rejects.toThrow(/outside our service area/);
+      });
+
+      it("stops serving a village the admin removed from the zone list", async () => {
+        await seedConfig({ serviceZones: [zone()] });
+        await expect(
+          placeOrder.run(order("cust1", { latitude: 16.55, longitude: 81.52 }))
+        ).rejects.toThrow(/outside our service area/);
+      });
+
+      it("falls back to the built-in villages when the configured zones are unusable", async () => {
+        await seedConfig({ serviceZones: [{ name: "", lat: "x", lng: null, radiusKm: -1 }] });
+        const result = await placeOrder.run(order("cust1", { latitude: 16.55, longitude: 81.52 }));
+        expect(result.orderId).toBeTruthy();
+      });
+
+      it("still rejects a pin that is exactly a configured zone centre", async () => {
+        await seedConfig({ serviceZones: [zone()] });
+        await expect(
+          placeOrder.run(order("cust1", { latitude: 16.77, longitude: 81.53 }))
+        ).rejects.toThrow(/pin your exact/);
+      });
     });
 
     it("derives the order's village from the pin, not the profile village", async () => {

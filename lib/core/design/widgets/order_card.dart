@@ -3,6 +3,8 @@ import 'package:hypermart/domain/entities/order.dart';
 import '../app_tokens.dart';
 import 'app_card.dart';
 import 'status_chip.dart';
+import '../../utils/date_format.dart';
+import '../../utils/money.dart';
 
 /// Consolidated, responsive order card used across Customer History, Rider, and Admin views.
 class OrderCard extends StatelessWidget {
@@ -22,15 +24,11 @@ class OrderCard extends StatelessWidget {
     final diff = now.difference(dt);
 
     if (diff.inDays == 0) {
-      final hour = dt.hour % 12 == 0 ? 12 : dt.hour % 12;
-      final minute = dt.minute.toString().padLeft(2, '0');
-      final period = dt.hour >= 12 ? 'PM' : 'AM';
-      return 'Today, $hour:$minute $period';
+      return 'Today, ${formatTime(dt)}';
     } else if (diff.inDays == 1) {
       return 'Yesterday';
     } else {
-      const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-      return '${months[dt.month - 1]} ${dt.day}, ${dt.year}';
+      return formatDate(dt);
     }
   }
 
@@ -74,7 +72,8 @@ class OrderCard extends StatelessWidget {
                   ],
                 ),
               ),
-              StatusChip(status: order.status),
+              const SizedBox(width: AppTokens.s8),
+              Flexible(child: StatusChip(status: order.status)),
             ],
           ),
           const Divider(height: AppTokens.s20),
@@ -113,8 +112,9 @@ class OrderCard extends StatelessWidget {
                   ],
                 ),
               ),
+              const SizedBox(width: AppTokens.s8),
               Text(
-                '₹${order.totalAmount.toStringAsFixed(order.totalAmount == order.totalAmount.roundToDouble() ? 0 : 2)}',
+                formatRupees(order.totalAmount),
                 style: Theme.of(context).textTheme.titleMedium?.copyWith(
                       fontWeight: FontWeight.w800,
                       color: scheme.onSurface,

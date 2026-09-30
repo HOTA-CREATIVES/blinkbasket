@@ -12,6 +12,7 @@ import '../../../core/providers/product_provider.dart';
 import '../../../core/providers/profile_provider.dart';
 import '../../../core/utils/route_generator.dart';
 import '../../../domain/entities/product.dart';
+import '../../../core/utils/money.dart';
 
 /// Full-page product details screen, Blinkit-style: hero image with a
 /// floating ADD/quantity control, delivery ETA badge, price, product
@@ -53,8 +54,8 @@ class _ProductDetailsScreenState extends State<ProductDetailsScreen> {
     final scheme = Theme.of(context).colorScheme;
     final cart = context.watch<CartProvider>();
     final quantity = cart.items[product.id]?.quantity ?? 0;
-    final outOfStock = product.stock <= 0;
-    final lowStock = !outOfStock && product.stock <= 5;
+    final outOfStock = product.isOutOfStock;
+    final lowStock = !outOfStock && product.sellableStock <= 5;
 
     return Scaffold(
       backgroundColor: scheme.surface,
@@ -87,7 +88,7 @@ class _ProductDetailsScreenState extends State<ProductDetailsScreen> {
                   child: _RoundIconButton(
                     icon: Icons.share_outlined,
                     onTap: () => Share.share(
-                      'Check out ${product.name} on J C Mart — ₹${_formatPrice(product.price)} (${product.unit})',
+                      'Check out ${product.name} on J C Mart — ₹${_formatPrice(product.effectivePrice)} (${product.unit})',
                     ),
                   ),
                 ),
@@ -119,7 +120,7 @@ class _ProductDetailsScreenState extends State<ProductDetailsScreen> {
                               quantity: quantity,
                               onIncrement: () => cart.addItem(product),
                               onDecrement: () => cart.decrementItem(product.id),
-                              canIncrement: quantity < product.stock,
+                              canIncrement: quantity < product.sellableStock,
                             ),
                           )
                         : _FloatingAddButton(
@@ -157,13 +158,24 @@ class _ProductDetailsScreenState extends State<ProductDetailsScreen> {
                     crossAxisAlignment: CrossAxisAlignment.end,
                     children: [
                       Text(
-                        '₹${_formatPrice(product.price)}',
+                        '₹${_formatPrice(product.effectivePrice)}',
                         style: TextStyle(
                           color: scheme.onSurface,
                           fontWeight: FontWeight.w800,
                           fontSize: 24,
                         ),
                       ),
+                      if (product.hasDiscount) ...[
+                        const SizedBox(width: AppTokens.s8),
+                        Text(
+                          '₹${_formatPrice(product.price)}',
+                          style: TextStyle(
+                            color: scheme.onSurfaceVariant,
+                            decoration: TextDecoration.lineThrough,
+                            fontSize: 15,
+                          ),
+                        ),
+                      ],
                       if (product.requiresPrescription) ...[
                         const SizedBox(width: AppTokens.s12),
                         _RxBadge(),
@@ -173,7 +185,7 @@ class _ProductDetailsScreenState extends State<ProductDetailsScreen> {
                   if (lowStock) ...[
                     const SizedBox(height: AppTokens.s8),
                     Text(
-                      'Only ${product.stock} left — order soon!',
+                      'Only ${product.sellableStock} left',
                       style: const TextStyle(
                         color: AppTokens.accent,
                         fontWeight: FontWeight.w700,
@@ -324,7 +336,7 @@ class _ProductDetailsScreenState extends State<ProductDetailsScreen> {
                             style: Theme.of(context).textTheme.bodySmall?.copyWith(fontSize: 11),
                           ),
                           Text(
-                            '₹${_formatPrice(product.discountedPrice ?? product.price)}',
+                            '₹${_formatPrice(product.effectivePrice)}',
                             style: Theme.of(context).textTheme.titleMedium?.copyWith(
                                   fontWeight: FontWeight.w800,
                                 ),
@@ -340,7 +352,7 @@ class _ProductDetailsScreenState extends State<ProductDetailsScreen> {
                                     quantity: quantity,
                                     onIncrement: () => cart.addItem(product),
                                     onDecrement: () => cart.decrementItem(product.id),
-                                    canIncrement: quantity < product.stock,
+                                    canIncrement: quantity < product.sellableStock,
                                   ),
                                   const SizedBox(width: AppTokens.s12),
                                   Expanded(
@@ -638,8 +650,4 @@ class _SimilarProducts extends StatelessWidget {
   }
 }
 
-String _formatPrice(double price) {
-  return price == price.roundToDouble()
-      ? price.toStringAsFixed(0)
-      : price.toStringAsFixed(2);
-}
+String _formatPrice(double price) => formatAmount(price);

@@ -6,7 +6,7 @@ import '../../../core/providers/config_provider.dart';
 import '../../../domain/entities/app_config.dart';
 import '../../../core/design/app_tokens.dart';
 
-/// Privacy Policy & Version Details screen for JC Mart
+/// Privacy Policy & Version Details screen for J C Mart
 class PrivacyPolicyScreen extends StatefulWidget {
   const PrivacyPolicyScreen({super.key});
 

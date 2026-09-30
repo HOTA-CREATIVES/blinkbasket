@@ -12,6 +12,8 @@ import '../../../../core/utils/route_generator.dart';
 import '../../../../domain/entities/app_config.dart';
 import '../../../../domain/entities/order.dart';
 import '../../../../domain/entities/support_ticket.dart';
+import '../../../../core/utils/money.dart';
+import '../../../../core/utils/date_format.dart';
 
 class CustomerSupportHubScreen extends StatefulWidget {
   final String? initialOrderId;
@@ -242,7 +244,7 @@ class _CustomerSupportHubScreenState extends State<CustomerSupportHubScreen>
             _buildFaqTile(
               question: 'How does Cash on Delivery (COD) work?',
               answer:
-                  'You pay cash or scan the rider\'s UPI QR code upon delivery. You only need to share your 4-digit Delivery OTP to complete the transaction once items are checked.',
+                  'You pay the rider in cash when your order arrives. Share your 4-digit delivery OTP with the rider once you have checked the items.',
             ),
             _buildFaqTile(
               question: 'Which villages and areas are covered?',
@@ -485,9 +487,7 @@ class _CustomerSupportHubScreenState extends State<CustomerSupportHubScreen>
     );
   }
 
-  String _formatDate(DateTime dt) {
-    return '${dt.day}/${dt.month}/${dt.year} · ${dt.hour % 12 == 0 ? 12 : dt.hour % 12}:${dt.minute.toString().padLeft(2, '0')} ${dt.hour >= 12 ? 'PM' : 'AM'}';
-  }
+  String _formatDate(DateTime dt) => formatDateTime(dt);
 }
 
 class _RaiseTicketSheet extends StatefulWidget {
@@ -674,7 +674,7 @@ class _RaiseTicketSheetState extends State<_RaiseTicketSheet> {
                           const DropdownMenuItem<String?>(value: null, child: Text('None (General Inquiry)')),
                           ...orders.take(10).map((o) => DropdownMenuItem<String?>(
                                 value: o.id,
-                                child: Text('#${o.id.substring(0, o.id.length < 6 ? o.id.length : 6).toUpperCase()} · ₹${o.totalAmount.toStringAsFixed(0)} · ${o.status.toUpperCase()}'),
+                                child: Text('#${o.id.substring(0, o.id.length < 6 ? o.id.length : 6).toUpperCase()} · ${formatRupees(o.totalAmount)} · ${o.status.toUpperCase()}'),
                               )),
                         ],
                         onChanged: (val) => setState(() => _selectedOrderId = val),

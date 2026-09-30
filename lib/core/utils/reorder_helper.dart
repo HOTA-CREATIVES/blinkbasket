@@ -26,14 +26,20 @@ class ReorderHelper {
 
     for (final item in items) {
       final product = await getProduct(item.productId);
-      if (product == null || product.stock <= 0) {
+      if (product == null || product.isOutOfStock) {
         skipped++;
         continue;
       }
-      final quantity =
-          item.quantity < product.stock ? item.quantity : product.stock;
-      cart.addItemQuantity(product, quantity);
-      added++;
+      final quantity = item.quantity < product.sellableStock
+          ? item.quantity
+          : product.sellableStock;
+      // addItemQuantity refuses to exceed stock (counting what is already in
+      // the cart), so only count the line as added when it really was.
+      if (cart.addItemQuantity(product, quantity)) {
+        added++;
+      } else {
+        skipped++;
+      }
     }
 
     return ReorderOutcome(addedCount: added, skippedCount: skipped);

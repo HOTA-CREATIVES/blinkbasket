@@ -1,4 +1,54 @@
 // @ts-nocheck
+import { cancelOrder } from "../src/index";
+import { getFirestore } from "firebase-admin/firestore";
+import { clearFirestore, callableRequest } from "./testUtils";
+
+const cancelDb = getFirestore();
+
+describe("cancelOrder (integration)", () => {
+  beforeEach(async () => {
+    await clearFirestore();
+    await cancelDb.collection("admins").doc("admin1").set({ isActive: true });
+  });
+
+  const seed = (status: string) =>
+    cancelDb.collection("orders").doc("order1").set({ customerId: "cust1", status });
+
+  it("lets an admin cancel an active order", async () => {
+    await seed("out_for_delivery");
+    await cancelOrder.run(callableRequest({ orderId: "order1", reason: "test" }, "admin1"));
+    const snap = await cancelDb.collection("orders").doc("order1").get();
+    expect(snap.data()?.status).toBe("cancelled");
+    expect(snap.data()?.cancelledBy).toBe("admin");
+  });
+
+  it("refuses to cancel a delivered order, even for an admin (its stock is already consumed)", async () => {
+    await seed("delivered");
+    await expect(
+      cancelOrder.run(callableRequest({ orderId: "order1" }, "admin1"))
+    ).rejects.toThrow(/already delivered/);
+    const snap = await cancelDb.collection("orders").doc("order1").get();
+    expect(snap.data()?.status).toBe("delivered");
+  });
+
+  it("refuses to re-cancel an already cancelled order", async () => {
+    await seed("cancelled");
+    await expect(
+      cancelOrder.run(callableRequest({ orderId: "order1" }, "admin1"))
+    ).rejects.toThrow(/already cancelled/);
+  });
+
+  it("still lets a customer cancel their own pending order but not someone else's", async () => {
+    await seed("pending");
+    await expect(
+      cancelOrder.run(callableRequest({ orderId: "order1" }, "cust2"))
+    ).rejects.toThrow(/your own orders/);
+    await cancelOrder.run(callableRequest({ orderId: "order1" }, "cust1"));
+    const snap = await cancelDb.collection("orders").doc("order1").get();
+    expect(snap.data()?.cancelledBy).toBe("customer");
+  });
+});
+
 describe("cancelOrder validation", () => {
   it("rejects unauthenticated request", () => {
     const uid: string | undefined = undefined;

@@ -1,6 +1,10 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:latlong2/latlong.dart' hide Path;
+import '../../../domain/entities/service_zone.dart';
+import '../../services/geocoding_service.dart';
+import '../../utils/customer_helper.dart';
 import '../app_tokens.dart';
 
 /// Free, no-API-key CartoDB Voyager tiles — a more polished/legible look
@@ -78,8 +82,10 @@ class _TeardropPainter extends CustomPainter {
 /// A reusable Leaflet-based map picker shown as a modal bottom sheet.
 ///
 /// The user drags the map so the fixed center-screen pin lands on their
-/// desired location, then taps "Confirm". Returns `(lat, lng)` via the
-/// [onConfirmed] callback, or `null` if dismissed.
+/// desired location — or searches for an address / landmark — then taps
+/// "Confirm". The delivery zones are drawn on the map and the sheet says live
+/// whether the pin is deliverable; Confirm stays disabled outside them.
+/// Returns `(lat, lng)` via the [onConfirmed] callback.
 ///
 /// Usage:
 /// ```dart
@@ -87,6 +93,7 @@ class _TeardropPainter extends CustomPainter {
 ///   context: context,
 ///   initialLat: 16.5449,
 ///   initialLng: 81.5212,
+///   zones: configProvider.latestServiceZones,
 ///   onConfirmed: (lat, lng) { /* use coordinates */ },
 /// );
 /// ```
@@ -101,12 +108,26 @@ class LeafletLocationPicker extends StatefulWidget {
   final bool initialIsPinned;
   final void Function(double lat, double lng) onConfirmed;
 
+  /// The delivery zones in force. Empty falls back to the built-in villages,
+  /// the same fallback the rest of the app (and the server) uses.
+  final List<ServiceZone> zones;
+
+  /// Address search backend; the default calls the `searchAddress` function.
+  final GeocodingService? geocoder;
+
+  /// Overrides how map tiles are fetched (tests use a blank provider).
+  @visibleForTesting
+  final TileProvider? tileProvider;
+
   const LeafletLocationPicker({
     super.key,
     required this.initialLat,
     required this.initialLng,
     this.initialIsPinned = false,
     required this.onConfirmed,
+    this.zones = const [],
+    this.geocoder,
+    this.tileProvider,
   });
 
   /// Convenience method to show the picker as a modal bottom sheet.
@@ -116,6 +137,7 @@ class LeafletLocationPicker extends StatefulWidget {
     required double initialLng,
     bool initialIsPinned = false,
     required void Function(double lat, double lng) onConfirmed,
+    List<ServiceZone> zones = const [],
   }) {
     showModalBottomSheet(
       context: context,
@@ -129,6 +151,7 @@ class LeafletLocationPicker extends StatefulWidget {
         initialLng: initialLng,
         initialIsPinned: initialIsPinned,
         onConfirmed: onConfirmed,
+        zones: zones,
       ),
     );
   }
@@ -138,10 +161,24 @@ class LeafletLocationPicker extends StatefulWidget {
 }
 
 class _LeafletLocationPickerState extends State<LeafletLocationPicker> {
+  static const _searchDebounce = Duration(milliseconds: 400);
+  static const _tileErrorsBeforeWarning = 4;
+
   final MapController _mapController = MapController();
+  final TextEditingController _searchController = TextEditingController();
+  late final GeocodingService _geocoder = widget.geocoder ?? GeocodingService();
+  late final List<ServiceZone> _zones = CustomerHelper.effectiveZones(widget.zones);
+
   late double _selectedLat;
   late double _selectedLng;
   late bool _hasMoved = widget.initialIsPinned;
+
+  Timer? _searchTimer;
+  int _searchGeneration = 0;
+  bool _isSearching = false;
+  String? _searchError;
+  List<PlaceSuggestion>? _results;
+  int _tileErrors = 0;
 
   @override
   void initState() {
@@ -152,151 +189,407 @@ class _LeafletLocationPickerState extends State<LeafletLocationPicker> {
 
   @override
   void dispose() {
+    _searchTimer?.cancel();
+    _searchController.dispose();
     _mapController.dispose();
     super.dispose();
+  }
+
+  ({String name, double distanceMeters, bool isInside}) get _zoneStatus =>
+      CustomerHelper.nearestZone(_selectedLat, _selectedLng, _zones);
+
+  void _onQueryChanged(String query) {
+    _searchTimer?.cancel();
+    final trimmed = query.trim();
+    if (trimmed.length < 3) {
+      // Anything in flight is now stale.
+      _searchGeneration++;
+      setState(() {
+        _results = null;
+        _searchError = null;
+        _isSearching = false;
+      });
+      return;
+    }
+    _searchTimer = Timer(_searchDebounce, () => _runSearch(trimmed));
+  }
+
+  Future<void> _runSearch(String query) async {
+    final generation = ++_searchGeneration;
+    setState(() {
+      _isSearching = true;
+      _searchError = null;
+    });
+    final outcome = await _geocoder.search(query);
+    // A newer keystroke superseded this search while it was in flight.
+    if (!mounted || generation != _searchGeneration) return;
+    setState(() {
+      _isSearching = false;
+      _searchError = outcome.error;
+      _results = outcome.isSuccess ? outcome.places : null;
+    });
+  }
+
+  void _selectPlace(PlaceSuggestion place) {
+    FocusScope.of(context).unfocus();
+    _mapController.move(LatLng(place.lat, place.lng), 17);
+    setState(() {
+      _selectedLat = place.lat;
+      _selectedLng = place.lng;
+      _hasMoved = true;
+      _results = null;
+      _searchError = null;
+      _searchController.text = place.label;
+    });
   }
 
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
+    final media = MediaQuery.of(context);
+    final status = _zoneStatus;
+    final canConfirm = _hasMoved && status.isInside;
 
-    return SizedBox(
-      height: MediaQuery.of(context).size.height * 0.75,
-      child: Padding(
-        padding: const EdgeInsets.fromLTRB(
-            AppTokens.s16, 0, AppTokens.s16, AppTokens.s16),
-        child: Column(
-          children: [
-            const SizedBox(height: 8),
-            // Drag handle
-            Container(
-              width: 40,
-              height: 4,
-              decoration: BoxDecoration(
-                color: scheme.outlineVariant,
-                borderRadius: BorderRadius.circular(2),
-              ),
-            ),
-            const SizedBox(height: 12),
-            Text(
-              'Pinpoint on Map',
-              style: Theme.of(context)
-                  .textTheme
-                  .titleMedium
-                  ?.copyWith(fontWeight: FontWeight.w900),
-            ),
-            const SizedBox(height: AppTokens.s4),
-            Text(
-              'Drag the map to center the marker on your exact location.',
-              style: Theme.of(context)
-                  .textTheme
-                  .labelMedium
-                  ?.copyWith(color: scheme.onSurfaceVariant),
-              textAlign: TextAlign.center,
-            ),
-            const SizedBox(height: AppTokens.s12),
-            // Map
-            Expanded(
-              child: ClipRRect(
-                borderRadius: BorderRadius.circular(AppTokens.rLg),
-                child: Stack(
-                  children: [
-                    FlutterMap(
-                      mapController: _mapController,
-                      options: MapOptions(
-                        initialCenter:
-                            LatLng(widget.initialLat, widget.initialLng),
-                        initialZoom: 16.0,
-                        // Track every camera change, not just gesture-driven
-                        // ones — fling/inertia frames report hasGesture=false
-                        // and would otherwise leave a stale selection.
-                        onPositionChanged: (position, hasGesture) {
-                          setState(() {
-                            _selectedLat = position.center.latitude;
-                            _selectedLng = position.center.longitude;
-                            if (hasGesture) _hasMoved = true;
-                          });
-                        },
-                      ),
-                      children: [
-                        TileLayer(
-                          urlTemplate: _kTileUrlTemplate,
-                          subdomains: _kTileSubdomains,
-                          userAgentPackageName: _kUserAgentPackage,
-                        ),
-                        const _MapAttribution(),
-                      ],
-                    ),
-                    // Fixed center pin
-                    Center(
-                      child: _TeardropPin(color: scheme.primary),
-                    ),
-                    // Crosshair shadow for better visibility
-                    Center(
-                      child: Container(
-                        width: 4,
-                        height: 4,
-                        decoration: BoxDecoration(
-                          color: Colors.black.withValues(alpha: 0.3),
-                          shape: BoxShape.circle,
-                        ),
-                      ),
-                    ),
-                  ],
+    return Padding(
+      padding: EdgeInsets.only(bottom: media.viewInsets.bottom),
+      child: SizedBox(
+        height: (media.size.height - media.viewInsets.bottom) * 0.75,
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(
+              AppTokens.s16, 0, AppTokens.s16, AppTokens.s16),
+          child: Column(
+            children: [
+              const SizedBox(height: 8),
+              // Drag handle
+              Container(
+                width: 40,
+                height: 4,
+                decoration: BoxDecoration(
+                  color: scheme.outlineVariant,
+                  borderRadius: BorderRadius.circular(2),
                 ),
               ),
-            ),
-            const SizedBox(height: AppTokens.s12),
-            // Coordinate readout
-            Container(
-              padding: const EdgeInsets.symmetric(
-                  horizontal: AppTokens.s12, vertical: AppTokens.s8),
-              decoration: BoxDecoration(
-                color: scheme.surfaceContainerHighest,
-                borderRadius: BorderRadius.circular(AppTokens.rSm),
+              const SizedBox(height: 12),
+              Text(
+                'Pinpoint on Map',
+                style: Theme.of(context)
+                    .textTheme
+                    .titleMedium
+                    ?.copyWith(fontWeight: FontWeight.w900),
               ),
-              child: Row(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  Icon(Icons.my_location_rounded,
-                      size: 14, color: scheme.primary),
-                  const SizedBox(width: AppTokens.s8),
-                  Text(
-                    '${_selectedLat.toStringAsFixed(6)}, ${_selectedLng.toStringAsFixed(6)}',
-                    style: Theme.of(context)
-                        .textTheme
-                        .bodySmall
-                        ?.copyWith(fontWeight: FontWeight.w800, color: scheme.onSurface),
+              const SizedBox(height: AppTokens.s8),
+              TextField(
+                controller: _searchController,
+                textInputAction: TextInputAction.search,
+                onChanged: _onQueryChanged,
+                decoration: InputDecoration(
+                  isDense: true,
+                  hintText: 'Search your street or landmark',
+                  prefixIcon: const Icon(Icons.search_rounded, size: 20),
+                  suffixIcon: _searchController.text.isEmpty
+                      ? null
+                      : IconButton(
+                          tooltip: 'Clear search',
+                          icon: const Icon(Icons.close_rounded, size: 18),
+                          onPressed: () {
+                            _searchController.clear();
+                            _onQueryChanged('');
+                          },
+                        ),
+                ),
+              ),
+              const SizedBox(height: AppTokens.s8),
+              Text(
+                'Or drag the map to place the marker on your exact location.',
+                style: Theme.of(context)
+                    .textTheme
+                    .labelMedium
+                    ?.copyWith(color: scheme.onSurfaceVariant),
+                textAlign: TextAlign.center,
+              ),
+              const SizedBox(height: AppTokens.s8),
+              // Map
+              Expanded(
+                child: ClipRRect(
+                  borderRadius: BorderRadius.circular(AppTokens.rLg),
+                  child: Stack(
+                    children: [
+                      FlutterMap(
+                        mapController: _mapController,
+                        options: MapOptions(
+                          initialCenter:
+                              LatLng(widget.initialLat, widget.initialLng),
+                          initialZoom: 16.0,
+                          // Track every camera change, not just gesture-driven
+                          // ones — fling/inertia frames report hasGesture=false
+                          // and would otherwise leave a stale selection.
+                          onPositionChanged: (position, hasGesture) {
+                            setState(() {
+                              _selectedLat = position.center.latitude;
+                              _selectedLng = position.center.longitude;
+                              if (hasGesture) _hasMoved = true;
+                            });
+                          },
+                        ),
+                        children: [
+                          TileLayer(
+                            urlTemplate: _kTileUrlTemplate,
+                            subdomains: _kTileSubdomains,
+                            userAgentPackageName: _kUserAgentPackage,
+                            tileProvider: widget.tileProvider,
+                            errorTileCallback: (tile, error, stackTrace) {
+                              // Count quietly; only warn once it is clearly
+                              // more than a stray missing tile.
+                              _tileErrors++;
+                              if (_tileErrors == _tileErrorsBeforeWarning && mounted) {
+                                setState(() {});
+                              }
+                            },
+                          ),
+                          CircleLayer(
+                            circles: [
+                              for (final z in _zones)
+                                CircleMarker(
+                                  point: LatLng(z.lat, z.lng),
+                                  radius: z.radiusKm * 1000,
+                                  useRadiusInMeter: true,
+                                  color: scheme.primary.withValues(alpha: 0.06),
+                                  borderColor: scheme.primary.withValues(alpha: 0.45),
+                                  borderStrokeWidth: 1.5,
+                                ),
+                            ],
+                          ),
+                          const _MapAttribution(),
+                        ],
+                      ),
+                      // Fixed center pin. Ignoring pointer events matters: the
+                      // pin sits exactly where a drag tends to start, and if it
+                      // took the touch the map would not pan.
+                      IgnorePointer(
+                        child: Center(
+                          child: _TeardropPin(color: scheme.primary),
+                        ),
+                      ),
+                      // Crosshair shadow for better visibility
+                      IgnorePointer(
+                        child: Center(
+                          child: Container(
+                            width: 4,
+                            height: 4,
+                            decoration: BoxDecoration(
+                              color: Colors.black.withValues(alpha: 0.3),
+                              shape: BoxShape.circle,
+                            ),
+                          ),
+                        ),
+                      ),
+                      if (_tileErrors >= _tileErrorsBeforeWarning)
+                        Positioned(
+                          left: AppTokens.s8,
+                          right: AppTokens.s8,
+                          bottom: AppTokens.s8,
+                          child: _MapNotice(
+                            icon: Icons.wifi_off_rounded,
+                            text: "The map isn't loading. Check your connection, "
+                                'or search for your address above.',
+                            color: scheme.errorContainer,
+                            onColor: scheme.onErrorContainer,
+                          ),
+                        ),
+                      if (_isSearching ||
+                          _searchError != null ||
+                          (_results != null))
+                        Positioned(
+                          top: 0,
+                          left: 0,
+                          right: 0,
+                          child: _SearchResults(
+                            isSearching: _isSearching,
+                            error: _searchError,
+                            places: _results,
+                            onSelect: _selectPlace,
+                          ),
+                        ),
+                    ],
                   ),
-                ],
-              ),
-            ),
-            const SizedBox(height: AppTokens.s12),
-            // Confirm button
-            SizedBox(
-              width: double.infinity,
-              child: ElevatedButton.icon(
-                onPressed: !_hasMoved
-                    ? null
-                    : () {
-                        // Read the camera itself so the result is the pin's
-                        // true position even if a fling is still settling.
-                        final center = _mapController.camera.center;
-                        widget.onConfirmed(center.latitude, center.longitude);
-                        Navigator.pop(context);
-                      },
-                icon: const Icon(Icons.check_rounded, size: 18),
-                label: Text(_hasMoved
-                    ? 'Confirm Pinned Location'
-                    : 'Move the map to your exact spot'),
-                style: ElevatedButton.styleFrom(
-                  padding:
-                      const EdgeInsets.symmetric(vertical: AppTokens.s16),
                 ),
               ),
-            ),
-          ],
+              const SizedBox(height: AppTokens.s8),
+              // Deliverability of the pin, live.
+              Semantics(
+                liveRegion: true,
+                child: Container(
+                  width: double.infinity,
+                  padding: const EdgeInsets.symmetric(
+                      horizontal: AppTokens.s12, vertical: AppTokens.s8),
+                  decoration: BoxDecoration(
+                    color: (status.isInside ? scheme.primaryContainer : scheme.errorContainer)
+                        .withValues(alpha: 0.6),
+                    borderRadius: BorderRadius.circular(AppTokens.rSm),
+                  ),
+                  child: Row(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      Icon(
+                        status.isInside
+                            ? Icons.check_circle_outline_rounded
+                            : Icons.location_off_outlined,
+                        size: 16,
+                        color: status.isInside ? scheme.primary : scheme.error,
+                      ),
+                      const SizedBox(width: AppTokens.s8),
+                      Flexible(
+                        child: Text(
+                          status.isInside
+                              ? 'We deliver here (${status.name})'
+                              : "We don't deliver to this spot yet",
+                          style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                                fontWeight: FontWeight.w800,
+                                color: status.isInside
+                                    ? scheme.onPrimaryContainer
+                                    : scheme.onErrorContainer,
+                              ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+              const SizedBox(height: AppTokens.s12),
+              // Confirm button
+              SizedBox(
+                width: double.infinity,
+                child: ElevatedButton.icon(
+                  onPressed: !canConfirm
+                      ? null
+                      : () {
+                          // Read the camera itself so the result is the pin's
+                          // true position even if a fling is still settling.
+                          final center = _mapController.camera.center;
+                          widget.onConfirmed(center.latitude, center.longitude);
+                          Navigator.pop(context);
+                        },
+                  icon: const Icon(Icons.check_rounded, size: 18),
+                  label: Text(!_hasMoved
+                      ? 'Move the map to your exact spot'
+                      : !status.isInside
+                          ? 'Move the pin inside the delivery area'
+                          : 'Confirm Pinned Location'),
+                  style: ElevatedButton.styleFrom(
+                    padding:
+                        const EdgeInsets.symmetric(vertical: AppTokens.s16),
+                  ),
+                ),
+              ),
+            ],
+          ),
         ),
+      ),
+    );
+  }
+}
+
+/// Address-search suggestions floating over the top of the map.
+class _SearchResults extends StatelessWidget {
+  final bool isSearching;
+  final String? error;
+  final List<PlaceSuggestion>? places;
+  final ValueChanged<PlaceSuggestion> onSelect;
+
+  const _SearchResults({
+    required this.isSearching,
+    required this.error,
+    required this.places,
+    required this.onSelect,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final places = this.places;
+
+    Widget body;
+    if (isSearching && (places == null || places.isEmpty)) {
+      body = const Padding(
+        padding: EdgeInsets.all(AppTokens.s16),
+        child: Center(
+          child: SizedBox(
+              width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2)),
+        ),
+      );
+    } else if (error != null) {
+      body = Padding(
+        padding: const EdgeInsets.all(AppTokens.s16),
+        child: Text(error!, style: TextStyle(color: scheme.error)),
+      );
+    } else if (places != null && places.isEmpty) {
+      body = const Padding(
+        padding: EdgeInsets.all(AppTokens.s16),
+        child: Text('No matches in our delivery area. Try a nearby landmark, or drag the map.'),
+      );
+    } else {
+      body = ListView.separated(
+        shrinkWrap: true,
+        padding: EdgeInsets.zero,
+        itemCount: places?.length ?? 0,
+        separatorBuilder: (_, __) => const Divider(height: 1),
+        itemBuilder: (context, index) {
+          final place = places![index];
+          return ListTile(
+            dense: true,
+            leading: Icon(
+              place.isDeliverable ? Icons.place_outlined : Icons.location_off_outlined,
+              color: place.isDeliverable ? scheme.primary : scheme.onSurfaceVariant,
+            ),
+            title: Text(place.label, maxLines: 2, overflow: TextOverflow.ellipsis),
+            subtitle: place.isDeliverable ? null : const Text('Outside our delivery area'),
+            onTap: () => onSelect(place),
+          );
+        },
+      );
+    }
+
+    return Material(
+      elevation: 4,
+      color: scheme.surface,
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(maxHeight: 240),
+        child: body,
+      ),
+    );
+  }
+}
+
+/// A one-line notice over the map.
+class _MapNotice extends StatelessWidget {
+  final IconData icon;
+  final String text;
+  final Color color;
+  final Color onColor;
+
+  const _MapNotice({
+    required this.icon,
+    required this.text,
+    required this.color,
+    required this.onColor,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.all(AppTokens.s8),
+      decoration: BoxDecoration(
+        color: color,
+        borderRadius: BorderRadius.circular(AppTokens.rSm),
+      ),
+      child: Row(
+        children: [
+          Icon(icon, size: 16, color: onColor),
+          const SizedBox(width: AppTokens.s8),
+          Expanded(
+            child: Text(text, style: TextStyle(fontSize: 12, color: onColor)),
+          ),
+        ],
       ),
     );
   }

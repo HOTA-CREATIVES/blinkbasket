@@ -1,13 +1,13 @@
-import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
-import 'package:http/http.dart' as http;
 import '../../../core/models/user_model.dart';
 import '../../../core/providers/profile_provider.dart';
 import '../../../core/providers/config_provider.dart';
+import '../../../core/services/geocoding_service.dart';
 import '../../../core/services/location_service.dart';
 import '../../../core/utils/customer_helper.dart';
 import '../../../core/design/app_tokens.dart';
+import '../../../core/design/widgets/leaflet_location_picker.dart';
 import '../../auth/widgets/village_dropdown.dart';
 
 class EditAddressScreen extends StatefulWidget {
@@ -57,91 +57,93 @@ class _EditAddressScreenState extends State<EditAddressScreen> {
     super.dispose();
   }
 
+  /// GPS: take a fix, then handle it like any other chosen point.
   Future<void> _fetchLiveLocation() async {
-    // Read from the widget tree before any await, then use the captured value
-    // across async gaps (avoids use_build_context_synchronously).
-    final liveZones =
-        Provider.of<ConfigProvider>(context, listen: false).latestServiceZones;
     setState(() {
       _isLocationLoading = true;
       _locationError = null;
       _failedFix = null;
     });
-    try {
-      final fixResult = await LocationService.currentFix();
-      final fix = fixResult.fix;
-      if (fix == null) {
-        if (mounted) setState(() => _failedFix = fixResult);
-        throw fixResult.message;
-      }
+    final fixResult = await LocationService.currentFix();
+    final fix = fixResult.fix;
+    if (fix == null) {
+      if (!mounted) return;
+      setState(() {
+        _isLocationLoading = false;
+        _failedFix = fixResult;
+        _locationError = fixResult.message;
+      });
+      return;
+    }
+    await _applyPoint(fix.latitude, fix.longitude);
+  }
 
-      final lat = fix.latitude;
-      final lng = fix.longitude;
-
-      // Zone membership comes from the coordinates (admin zones), not from
-      // fuzzy-matching Nominatim's free text — that matched the FIRST zone
-      // whenever the geocoder returned no village name.
-      final zoneMatch = CustomerHelper.nearestZone(lat, lng, liveZones);
-      if (!zoneMatch.isInside) {
-        throw "Sorry, we don't deliver to this location yet.";
-      }
-      // Keep the GPS fix even if the reverse-geocode below fails.
-      if (mounted) {
+  /// Map / search: the alternative when GPS is off, denied or inaccurate. The
+  /// picker itself limits the pin to the delivery area.
+  void _pinOnMap() {
+    final zones =
+        Provider.of<ConfigProvider>(context, listen: false).latestServiceZones;
+    final hasPin = _latitudeVal != null && _longitudeVal != null;
+    final centre = hasPin
+        ? (lat: _latitudeVal!, lng: _longitudeVal!)
+        : CustomerHelper.centerOf(_selectedVillage, zones);
+    LeafletLocationPicker.show(
+      context: context,
+      initialLat: centre.lat,
+      initialLng: centre.lng,
+      initialIsPinned: hasPin,
+      zones: zones,
+      onConfirmed: (lat, lng) {
         setState(() {
-          _latitudeVal = lat;
-          _longitudeVal = lng;
-          _selectedVillage = zoneMatch.name;
+          _isLocationLoading = true;
+          _locationError = null;
+          _failedFix = null;
         });
-      }
+        _applyPoint(lat, lng);
+      },
+    );
+  }
 
-      final url = Uri.parse(
-          'https://nominatim.openstreetmap.org/reverse?format=json&lat=$lat&lon=$lng&zoom=18&addressdetails=1');
-      final response = await http.get(url, headers: {'User-Agent': 'jc_mart_app'}).timeout(
-        const Duration(seconds: 10),
-        onTimeout: () => throw 'Connection timed out. Please check your network speed.',
+  /// Adopts a point (from GPS or the map): checks it against the delivery
+  /// zones, sets the village from them, and pre-fills the address form.
+  Future<void> _applyPoint(double lat, double lng) async {
+    if (!mounted) return;
+    final zones =
+        Provider.of<ConfigProvider>(context, listen: false).latestServiceZones;
+    // Zone membership comes from the coordinates (admin zones), not from
+    // fuzzy-matching geocoder text.
+    final zone = CustomerHelper.nearestZone(lat, lng, zones);
+    if (!zone.isInside) {
+      setState(() {
+        _isLocationLoading = false;
+        _locationError = "Sorry, we don't deliver to this location yet.";
+      });
+      return;
+    }
+    // Keep the point even if the address lookup below fails.
+    setState(() {
+      _latitudeVal = lat;
+      _longitudeVal = lng;
+      _selectedVillage = zone.name;
+    });
+
+    final suggestion = await GeocodingService().reverse(lat, lng);
+    if (!mounted) return;
+    setState(() {
+      _isLocationLoading = false;
+      if (suggestion == null) {
+        _locationError =
+            'Location saved, but address details could not be fetched — please fill them in.';
+        return;
+      }
+      if (suggestion.road.isNotEmpty) _addressController.text = suggestion.road;
+      if (suggestion.mandal.isNotEmpty) _mandalController.text = suggestion.mandal;
+      if (suggestion.pincode.isNotEmpty) _pinCodeController.text = suggestion.pincode;
+    });
+    if (suggestion != null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text("Location updated & auto-filled.")),
       );
-
-      if (response.statusCode == 200) {
-        final data = json.decode(response.body);
-        final address = data['address'] as Map<String, dynamic>? ?? {};
-
-        final road = address['road'] ?? address['suburb'] ?? address['neighbourhood'] ?? '';
-        final mandalName = address['county'] ?? address['state_district'] ?? '';
-        final postcode = address['postcode'] ?? '';
-
-        if (!mounted) return;
-        setState(() {
-          if (road.toString().isNotEmpty) {
-            _addressController.text = road.toString();
-          }
-          if (mandalName.toString().isNotEmpty) {
-            _mandalController.text = mandalName.toString();
-          }
-          if (postcode.toString().isNotEmpty) {
-            _pinCodeController.text = postcode.toString();
-          }
-        });
-        
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text("Location updated & auto-filled.")),
-          );
-        }
-      } else {
-        throw 'Location saved, but address details could not be fetched — please fill them in.';
-      }
-    } catch (e) {
-      if (mounted) {
-        setState(() {
-          _locationError = e.toString();
-        });
-      }
-    } finally {
-      if (mounted) {
-        setState(() {
-          _isLocationLoading = false;
-        });
-      }
     }
   }
 
@@ -231,6 +233,14 @@ class _EditAddressScreenState extends State<EditAddressScreen> {
                       side: BorderSide(color: AppTokens.primary.withValues(alpha: 0.15)),
                     ),
                     padding: const EdgeInsets.symmetric(vertical: 14),
+                  ),
+                ),
+                Align(
+                  alignment: Alignment.center,
+                  child: TextButton.icon(
+                    onPressed: _isLocationLoading ? null : _pinOnMap,
+                    icon: const Icon(Icons.pin_drop_outlined, size: 18),
+                    label: const Text('Search or pin on the map'),
                   ),
                 ),
                 const SizedBox(height: AppTokens.s12),

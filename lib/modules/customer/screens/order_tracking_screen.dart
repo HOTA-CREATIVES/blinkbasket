@@ -3,6 +3,8 @@ import 'package:flutter/material.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:provider/provider.dart';
 import '../../../core/design/app_tokens.dart';
+import '../../../core/design/widgets/bill_row.dart';
+import '../../../core/design/widgets/delivery_otp_card.dart';
 import '../../../core/design/widgets/empty_state.dart';
 import '../../../core/design/widgets/leaflet_location_picker.dart';
 import '../../../core/design/widgets/skeleton.dart';
@@ -12,9 +14,13 @@ import '../../../core/providers/config_provider.dart';
 import '../../../core/providers/order_provider.dart';
 import '../../../core/utils/reorder_helper.dart';
 import '../../../core/providers/product_provider.dart';
+import '../../../core/utils/date_format.dart';
+import '../../../core/utils/contact_launcher.dart';
+import '../../../core/utils/money.dart';
 import '../../../core/utils/route_generator.dart';
 import '../../../domain/entities/app_config.dart';
 import '../../../domain/entities/order.dart';
+import '../../../core/utils/app_exception.dart';
 
 class OrderTrackingScreen extends StatelessWidget {
   final String orderId;
@@ -39,11 +45,21 @@ class OrderTrackingScreen extends StatelessWidget {
     }
   }
 
-  Future<void> _callRider(String phone) async {
-    final uri = Uri(scheme: 'tel', path: phone);
-    if (await canLaunchUrl(uri)) {
-      await launchUrl(uri);
-    }
+  /// Calls or WhatsApps the rider, and says so when it can't be done — a
+  /// button that silently does nothing looks broken.
+  Future<void> _contactRider(BuildContext context, Order order,
+      {required bool whatsApp}) async {
+    final messenger = ScaffoldMessenger.of(context);
+    final launcher = ContactLauncher();
+    final shortId = order.id.substring(0, 6).toUpperCase();
+    final result = whatsApp
+        ? await launcher.whatsApp(
+            order.deliveryBoyPhone,
+            message: 'Hi, this is ${order.customerName} about order #$shortId.',
+          )
+        : await launcher.call(order.deliveryBoyPhone);
+    final problem = ContactLauncher.messageFor(result, what: whatsApp ? 'WhatsApp' : 'the phone app');
+    if (problem != null) messenger.showSnackBar(SnackBar(content: Text(problem)));
   }
 
   @override
@@ -73,10 +89,20 @@ class OrderTrackingScreen extends StatelessWidget {
           if (snapshot.connectionState == ConnectionState.waiting && !snapshot.hasData) {
             return const SkeletonList();
           }
-          if (snapshot.hasError || !snapshot.hasData) {
+          final error = snapshot.error;
+          if (error is AppException && error.code == 'not-found') {
             return const EmptyState(
               icon: Icons.receipt_long_outlined,
               title: 'Order not found',
+              message: 'This order no longer exists.',
+            );
+          }
+          if (error != null || !snapshot.hasData) {
+            return EmptyState.error(
+              title: "Couldn't load this order",
+              message: userMessageFor(error),
+              onAction: () => Provider.of<OrderProvider>(context, listen: false)
+                  .retryOrder(orderId),
             );
           }
 
@@ -106,7 +132,7 @@ class OrderTrackingScreen extends StatelessWidget {
                       ),
                       const SizedBox(height: AppTokens.s8),
                       Text(
-                        'COD Total: ₹${order.totalAmount.toStringAsFixed(2)}',
+                        'COD Total: ${formatRupees(order.totalAmount)}',
                         style: TextStyle(
                           color: scheme.primary,
                           fontWeight: FontWeight.w800,
@@ -218,7 +244,13 @@ class OrderTrackingScreen extends StatelessWidget {
                 const SizedBox(height: AppTokens.s16),
               ],
 
-              // Rider card with call button
+              // The code the rider will ask for, while the order is with a rider.
+              if (const ['assigned', 'picked_up', 'out_for_delivery'].contains(order.status)) ...[
+                DeliveryOtpCard(orderId: order.id, status: order.status),
+                const SizedBox(height: AppTokens.s16),
+              ],
+
+              // Rider card with call and WhatsApp
               if (order.deliveryBoyName != null &&
                   order.status != 'cancelled' &&
                   order.status != 'delivered') ...[
@@ -236,15 +268,33 @@ class OrderTrackingScreen extends StatelessWidget {
                     subtitle: const Text('Your local delivery partner'),
                     trailing: (order.deliveryBoyPhone != null &&
                             order.deliveryBoyPhone!.isNotEmpty)
-                        ? IconButton.filled(
-                            style: IconButton.styleFrom(
-                              backgroundColor: scheme.primary,
-                              foregroundColor: scheme.onPrimary,
-                            ),
-                            icon: const Icon(Icons.call_rounded, size: 20),
-                            tooltip: 'Call rider',
-                            onPressed: () =>
-                                _callRider(order.deliveryBoyPhone!),
+                        ? Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              IconButton.outlined(
+                                icon: const Icon(Icons.chat_rounded, size: 20),
+                                tooltip: 'Message rider on WhatsApp',
+                                onPressed: () => _contactRider(
+                                  context,
+                                  order,
+                                  whatsApp: true,
+                                ),
+                              ),
+                              const SizedBox(width: AppTokens.s8),
+                              IconButton.filled(
+                                style: IconButton.styleFrom(
+                                  backgroundColor: scheme.primary,
+                                  foregroundColor: scheme.onPrimary,
+                                ),
+                                icon: const Icon(Icons.call_rounded, size: 20),
+                                tooltip: 'Call rider',
+                                onPressed: () => _contactRider(
+                                  context,
+                                  order,
+                                  whatsApp: false,
+                                ),
+                              ),
+                            ],
                           )
                         : null,
                   ),
@@ -354,7 +404,7 @@ class OrderTrackingScreen extends StatelessWidget {
                                 ),
                               ),
                               Text(
-                                '₹${(item.price * item.quantity).toStringAsFixed(2)}',
+                                formatRupees(item.price * item.quantity),
                                 style:
                                     const TextStyle(fontWeight: FontWeight.w600),
                               ),
@@ -362,6 +412,38 @@ class OrderTrackingScreen extends StatelessWidget {
                           ),
                         );
                       }),
+                      const Divider(height: AppTokens.s24),
+                      BillRow(
+                        label: 'Item total',
+                        value: formatRupees(order.subtotal > 0
+                            ? order.subtotal
+                            : order.totalAmount - order.deliveryFee),
+                      ),
+                      BillRow(
+                        label: 'Delivery fee',
+                        value: order.deliveryFee == 0
+                            ? 'Free'
+                            : formatRupees(order.deliveryFee),
+                      ),
+                      BillRow(
+                        label: order.status == 'delivered' ? 'Total paid' : 'Total',
+                        value: formatRupees(order.totalAmount),
+                        emphasised: true,
+                      ),
+                      if (order.status == 'delivered') ...[
+                        const SizedBox(height: AppTokens.s8),
+                        BillRow(
+                          label: 'Paid in cash to '
+                              '${order.deliveryBoyName ?? 'your delivery partner'}',
+                          value: formatRupees(
+                              order.codCollectedAmount ?? order.totalAmount),
+                        ),
+                        if (order.deliveredAt != null)
+                          BillRow(
+                            label: 'Delivered',
+                            value: formatDateTime(order.deliveredAt!),
+                          ),
+                      ],
                     ],
                   ),
                 ),

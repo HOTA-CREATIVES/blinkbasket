@@ -98,7 +98,8 @@ class ProductDto extends Product {
       'name': name,
       'description': description,
       'price': price,
-      if (discountedPrice != null) 'discountedPrice': discountedPrice,
+      // An edit that removes the discount must delete the stored field.
+      'discountedPrice': discountedPrice ?? FieldValue.delete(),
       'imageUrl': imageUrl,
       'imageUrls': imageUrls,
       'category': category,
@@ -126,7 +127,7 @@ class ProductDto extends Product {
       'name': name,
       'description': description,
       'price': price,
-      if (discountedPrice != null) 'discountedPrice': discountedPrice,
+      'discountedPrice': discountedPrice ?? FieldValue.delete(),
       'imageUrl': imageUrl,
       'imageUrls': imageUrls,
       'category': category,

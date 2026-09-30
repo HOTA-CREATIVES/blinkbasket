@@ -47,6 +47,10 @@ class Order {
   /// moment of delivery (null until delivered, and on orders that predate it).
   final double? riderPayout;
 
+  /// The cash the rider confirmed collecting when the order was delivered
+  /// (null until then). Recorded by the server from the rider's confirmation.
+  final double? codCollectedAmount;
+
   // Backward compatibility getters
   String? get deliveryBoyId => deliveryPartnerId;
   String? get deliveryBoyName => deliveryPartnerName;
@@ -86,6 +90,7 @@ class Order {
     this.cancelReason,
     this.cancelledBy,
     this.riderPayout,
+    this.codCollectedAmount,
   })  : deliveryPartnerId = deliveryPartnerId ?? deliveryBoyId,
         deliveryPartnerName = deliveryPartnerName ?? deliveryBoyName,
         deliveryPartnerPhone = deliveryPartnerPhone ?? deliveryBoyPhone;

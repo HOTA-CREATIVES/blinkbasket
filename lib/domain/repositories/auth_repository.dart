@@ -11,6 +11,18 @@ abstract class AuthRepository {
   Future<AuthResult> registerCustomer(String email, String password);
   Future<AuthResult> signInWithGoogle();
   Future<bool> sendPasswordReset(String email);
+
+  /// Whether the signed-in account has proved it owns its email address
+  /// (always true for Google accounts). placeOrder refuses unverified ones.
+  bool get isEmailVerified;
+
+  /// Emails a verification link to the signed-in user. Returns null on success
+  /// or a message written for the user.
+  Future<String?> sendEmailVerification();
+
+  /// Reloads the account and refreshes its ID token, so a just-verified email
+  /// is visible to the app and to the Cloud Functions. Returns the new state.
+  Future<bool> refreshEmailVerification();
   Future<void> signOut();
   Future<bool> setupCustomerProfile(UserModel userModel);
   Future<bool> updateUserProfile(UserModel userModel);

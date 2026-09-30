@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import '../app_tokens.dart';
+import '../../utils/money.dart';
 
 enum PriceSize { small, medium, large, hero }
 
@@ -20,12 +21,7 @@ class PriceDisplay extends StatelessWidget {
     this.showDiscountBadge = true,
   });
 
-  String _format(double val) {
-    if (val == val.roundToDouble()) {
-      return '₹${val.toInt()}';
-    }
-    return '₹${val.toStringAsFixed(1)}';
-  }
+  String _format(double val) => formatRupees(val);
 
   @override
   Widget build(BuildContext context) {

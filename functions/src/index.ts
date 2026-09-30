@@ -5,7 +5,7 @@ import { initializeApp } from "firebase-admin/app";
 import { getFirestore, FieldValue, Timestamp } from "firebase-admin/firestore";
 import { getAuth } from "firebase-admin/auth";
 import { getMessaging } from "firebase-admin/messaging";
-import { createHash, randomBytes, randomInt } from "crypto";
+import { createHash, randomBytes, randomInt, timingSafeEqual } from "crypto";
 
 initializeApp();
 const db = getFirestore();
@@ -29,30 +29,59 @@ const MAX_OTP_ATTEMPTS = 5;
 const OTP_LOCKOUT_MINUTES = 10;
 const MAX_OTP_TOTAL_ATTEMPTS = 15;
 const ACTIVE_ORDER_STATUSES = ["pending", "assigned", "picked_up", "out_for_delivery"];
+// Statuses in which a rider is holding an order (pending has no rider yet).
+const RIDER_HELD_STATUSES = ["assigned", "picked_up", "out_for_delivery"];
+// One rider can't hoard the pool: at most this many held orders at a time
+// (config.maxActiveOrdersPerRider overrides, clamped to 1..20).
+const DEFAULT_MAX_ACTIVE_ORDERS_PER_RIDER = 3;
+// The delivery code is valid this long once the order is out for delivery. A
+// customer who wasn't ready can ask for a fresh one.
+const OTP_VALID_MINUTES = 120;
+const MAX_OTP_REGENERATIONS = 5;
+// A handover more than this far from the customer's pin is flagged for review
+// (recorded, never blocked: GPS drift and pin error are normal).
+const DELIVERY_FAR_METERS = 500;
 const ACTIVE_ORDER_MESSAGE =
   "You already have an active order in progress. You can only place one order at a time.";
 
-// ── Simple in-memory rate limiter ────────────────────────────────────
-// Resets when the function instance cold-starts. For stricter limits,
-// use Firebase App Check + Cloud Armor or a Redis-backed counter.
+// ── Firestore-backed rate limiter ────────────────────────────────────
+// Counters live in /rateLimits/{action}_{uid} (client access is denied by the
+// catch-all rule), so limits hold across function instances and cold starts.
+// Set a TTL policy on `expireAt` to garbage-collect old windows.
 const RATE_LIMIT_WINDOW_MS = 60_000; // 1 minute
 const RATE_LIMIT_MAX_CALLS = 20;     // max calls per window per UID
-const rateLimitStore = new Map<string, { count: number; windowStart: number }>();
 
-// Keyed by "action:uid" rather than uid alone — a burst on one callable
+// Keyed by "action_uid" rather than uid alone — a burst on one callable
 // (e.g. an admin uploading several product images via
 // getCloudinarySignature) must not lock the same user out of an unrelated
-// action (placeOrder, cancelOrder, ...).
-function checkRateLimit(uid: string, action: string): void {
-  const key = `${action}:${uid}`;
+// action (placeOrder, cancelOrder, ...). Infrastructure errors fail open so a
+// Firestore hiccup on the counter never takes ordering down with it.
+async function checkRateLimit(uid: string, action: string): Promise<void> {
+  const ref = db.collection("rateLimits").doc(`${action}_${uid}`);
   const now = Date.now();
-  const entry = rateLimitStore.get(key);
-  if (!entry || now - entry.windowStart > RATE_LIMIT_WINDOW_MS) {
-    rateLimitStore.set(key, { count: 1, windowStart: now });
+  let exceeded = false;
+  try {
+    exceeded = await db.runTransaction(async (tx) => {
+      const snap = await tx.get(ref);
+      const data = snap.data();
+      const windowStart = Number(data?.windowStart ?? 0);
+      if (!data || now - windowStart > RATE_LIMIT_WINDOW_MS) {
+        tx.set(ref, {
+          count: 1,
+          windowStart: now,
+          expireAt: Timestamp.fromMillis(now + 2 * RATE_LIMIT_WINDOW_MS),
+        });
+        return false;
+      }
+      if (Number(data.count ?? 0) >= RATE_LIMIT_MAX_CALLS) return true;
+      tx.update(ref, { count: FieldValue.increment(1) });
+      return false;
+    });
+  } catch (e) {
+    console.error(`[RATE_LIMIT_ERROR] ${action}_${uid}:`, e);
     return;
   }
-  entry.count++;
-  if (entry.count > RATE_LIMIT_MAX_CALLS) {
+  if (exceeded) {
     throw new HttpsError("resource-exhausted", "Too many requests. Please try again later.");
   }
 }
@@ -106,13 +135,82 @@ function haversineMeters(lat1: number, lon1: number, lat2: number, lon2: number)
   return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
 }
 
-function nearestVillage(lat: number, lng: number): { name: string; distance: number } {
-  let best = { name: "", distance: Infinity };
-  for (const v of VILLAGES) {
-    const d = haversineMeters(lat, lng, v.latitude, v.longitude);
-    if (d < best.distance) best = { name: v.name, distance: d };
+interface DeliveryZone {
+  name: string;
+  latitude: number;
+  longitude: number;
+  radiusMeters: number;
+}
+
+/**
+ * The delivery zones in force: the admin-configured `/config/app.serviceZones`
+ * (each with its own radius) when present and valid, else the built-in
+ * VILLAGES list. The client checks the same zones, so a zone the admin adds is
+ * orderable instead of passing the app and failing here.
+ */
+function deliveryZonesFromConfig(config: FirebaseFirestore.DocumentData): DeliveryZone[] {
+  const raw = config?.serviceZones;
+  const zones: DeliveryZone[] = Array.isArray(raw)
+    ? raw
+        .map((z: any) => ({
+          name: String(z?.name ?? "").trim(),
+          latitude: Number(z?.lat),
+          longitude: Number(z?.lng),
+          radiusMeters: Number(z?.radiusKm) * 1000,
+        }))
+        .filter(
+          (z) =>
+            z.name.length > 0 &&
+            isValidCoordinate(z.latitude, z.longitude) &&
+            Number.isFinite(z.radiusMeters) &&
+            z.radiusMeters > 0
+        )
+    : [];
+  if (zones.length > 0) return zones;
+  return VILLAGES.map((v) => ({
+    name: v.name,
+    latitude: v.latitude,
+    longitude: v.longitude,
+    radiusMeters: SERVICE_RADIUS_METERS,
+  }));
+}
+
+/** Which zone (if any) contains the point, plus how close the point is to the
+ * nearest zone centre (used to reject an un-pinned "centroid" placeholder). */
+function resolveDeliveryZone(
+  lat: number,
+  lng: number,
+  zones: DeliveryZone[]
+): { zone: DeliveryZone | null; zoneDistance: number; nearestCentreDistance: number } {
+  let zone: DeliveryZone | null = null;
+  let zoneDistance = Infinity;
+  let nearestCentreDistance = Infinity;
+  for (const z of zones) {
+    const d = haversineMeters(lat, lng, z.latitude, z.longitude);
+    nearestCentreDistance = Math.min(nearestCentreDistance, d);
+    if (d <= z.radiusMeters && d < zoneDistance) {
+      zone = z;
+      zoneDistance = d;
+    }
   }
-  return best;
+  return { zone, zoneDistance, nearestCentreDistance };
+}
+
+/** What the customer pays per unit: a valid discount (0 < discounted < price)
+ * when the admin has set one, else the list price. The app shows the same
+ * figure (Product.effectivePrice), so the displayed and charged price agree. */
+function effectivePrice(product: FirebaseFirestore.DocumentData): number {
+  const price = Number(product.price ?? 0);
+  const discounted = product.discountedPrice;
+  if (typeof discounted === "number" && Number.isFinite(discounted) && discounted > 0 && discounted < price) {
+    return discounted;
+  }
+  return price;
+}
+
+/** A product the admin has switched off (either flag) can't be ordered. */
+function isProductSellable(product: FirebaseFirestore.DocumentData): boolean {
+  return product.isActive !== false && product.isAvailable !== false;
 }
 
 // A real house pin never lands within a few metres of a village centroid, but
@@ -122,6 +220,104 @@ const CENTROID_PLACEHOLDER_METERS = 5;
 
 function isValidCoordinate(lat: number, lng: number): boolean {
   return Number.isFinite(lat) && Number.isFinite(lng) && Math.abs(lat) <= 90 && Math.abs(lng) <= 180;
+}
+
+/**
+ * Canonical 10-digit Indian mobile number from what a profile may hold
+ * ("9876543210", "+91 98765 43210", "09876543210"), or null when it isn't one.
+ * A rider must be able to call this number, so an order without a usable one
+ * is refused rather than dispatched.
+ */
+function normalizeIndianMobile(raw: unknown): string | null {
+  const compact = String(raw ?? "").replace(/[\s-]/g, "");
+  const match = compact.match(/^(?:\+?91|0)?([6-9]\d{9})$/);
+  return match ? match[1] : null;
+}
+
+/** Constant-time string comparison (avoids leaking OTP digits via timing). */
+function safeEqual(a: string, b: string): boolean {
+  const ab = Buffer.from(a);
+  const bb = Buffer.from(b);
+  return ab.length === bb.length && timingSafeEqual(ab, bb);
+}
+
+/** A rider location sent with a status change, or null when none was sent.
+ * Present-but-malformed is rejected rather than silently dropped. */
+function parseRiderLocation(raw: unknown): { lat: number; lng: number; accuracy: number | null } | null {
+  if (raw === undefined || raw === null) return null;
+  const loc = raw as { lat?: unknown; lng?: unknown; accuracy?: unknown };
+  if (
+    typeof loc.lat !== "number" ||
+    typeof loc.lng !== "number" ||
+    !isValidCoordinate(loc.lat, loc.lng)
+  ) {
+    throw new HttpsError("invalid-argument", "The location sent with this update is invalid.");
+  }
+  const accuracy = typeof loc.accuracy === "number" && Number.isFinite(loc.accuracy) && loc.accuracy >= 0
+    ? loc.accuracy
+    : null;
+  return { lat: loc.lat, lng: loc.lng, accuracy };
+}
+
+/** First name only — all a rider needs before accepting an order. */
+function firstName(value: unknown): string {
+  const n = String(value ?? "").trim().split(/\s+/)[0];
+  return n || "Customer";
+}
+
+/** Re-reads the live rider doc: a disabled or soft-deleted rider must not be
+ * able to act on orders through callables while a stale token is still valid. */
+async function assertActiveRider(uid: string): Promise<void> {
+  const snap = await db.collection("deliveryBoys").doc(uid).get();
+  const data = snap.data();
+  if (!data || data.isActive === false || data.isDeleted === true) {
+    throw new HttpsError("permission-denied", "Your account is deactivated. Contact support.");
+  }
+}
+
+/** True for an order that is open for any rider to claim. */
+function isOpenOffer(order: FirebaseFirestore.DocumentData | undefined): boolean {
+  return !!order && order.status === "pending" && !order.deliveryBoyId;
+}
+
+/**
+ * Maintains /orderOffers/{orderId}: the PII-free view of an unclaimed order
+ * that riders may read. The full order (customer phone, address, GPS pin) is
+ * readable only by the customer, an admin, and the rider who accepted it.
+ */
+async function syncOrderOffer(
+  orderId: string,
+  order: FirebaseFirestore.DocumentData | undefined
+): Promise<void> {
+  const ref = db.collection("orderOffers").doc(orderId);
+  try {
+    if (!order || !isOpenOffer(order)) {
+      await ref.delete();
+      return;
+    }
+    const items = Array.isArray(order.items) ? order.items : [];
+    await ref.set({
+      status: "pending",
+      deliveryBoyId: null,
+      customerName: firstName(order.customerName),
+      deliveryAddress: "",
+      village: String(order.village ?? ""),
+      items: items.map((i: any) => ({
+        productId: String(i?.productId ?? ""),
+        name: String(i?.name ?? ""),
+        price: Number(i?.price ?? 0),
+        quantity: Number(i?.quantity ?? 0),
+      })),
+      subtotal: Number(order.subtotal ?? 0),
+      deliveryFee: Number(order.deliveryFee ?? 0),
+      totalAmount: Number(order.totalAmount ?? 0),
+      paymentMethod: String(order.paymentMethod ?? "COD"),
+      createdAt: order.createdAt ?? Timestamp.now(),
+      updatedAt: Timestamp.now(),
+    });
+  } catch (e) {
+    console.error(`[OFFER_SYNC_FAILED] order ${orderId}:`, e);
+  }
 }
 
 async function getFcmTokens(collection: "users" | "deliveryBoys", uid: string): Promise<string[]> {
@@ -243,7 +439,7 @@ async function broadcastNewOrder(orderId: string, order: FirebaseFirestore.Docum
   await sendPushToTokens(
     tokens,
     "New delivery nearby",
-    `New order from ${order.customerName ?? "a customer"} in ${village}. Tap to accept.`,
+    `New order from ${firstName(order.customerName)} in ${village}. Tap to accept.`,
     { orderId, type: "new_order_offer" },
     tokenOwners
   );
@@ -268,7 +464,39 @@ export const placeOrder = onCall({ region: REGION, enforceAppCheck: process.env.
   if (!uid) {
     throw new HttpsError("unauthenticated", "Sign in to place an order.");
   }
-  checkRateLimit(uid, "placeOrder");
+  await checkRateLimit(uid, "placeOrder");
+
+  // Idempotency: the client sends one requestId per checkout attempt. The
+  // order id is derived from (uid, requestId), so a retry after a lost
+  // response returns the order that already exists instead of failing with
+  // "you already have an active order".
+  const requestId = String(request.data?.requestId ?? "").trim();
+  if (requestId && !/^[A-Za-z0-9_-]{8,64}$/.test(requestId)) {
+    throw new HttpsError("invalid-argument", "Invalid request id.");
+  }
+  const orderRef = requestId
+    ? db.collection("orders").doc(
+        createHash("sha256").update(`${uid}:${requestId}`).digest("hex").slice(0, 20)
+      )
+    : db.collection("orders").doc();
+  if (requestId) {
+    const existingSnap = await orderRef.get();
+    if (existingSnap.exists) {
+      const existing = existingSnap.data() as FirebaseFirestore.DocumentData;
+      if (existing.customerId !== uid) {
+        throw new HttpsError("permission-denied", "Invalid request id.");
+      }
+      const privateSnap = await orderRef.collection("private").doc("delivery").get();
+      return {
+        orderId: orderRef.id,
+        otp: String(privateSnap.data()?.otp ?? ""),
+        subtotal: Number(existing.subtotal ?? 0),
+        deliveryFee: Number(existing.deliveryFee ?? 0),
+        totalAmount: Number(existing.totalAmount ?? 0),
+        deduplicated: true,
+      };
+    }
+  }
 
   const items = request.data?.items as OrderItemInput[] | undefined;
   const deliveryAddress = String(request.data?.deliveryAddress ?? "").trim();
@@ -291,19 +519,31 @@ export const placeOrder = onCall({ region: REGION, enforceAppCheck: process.env.
       "A delivery location (GPS coordinates) is required to place an order."
     );
   }
-  const nearest = nearestVillage(latitude, longitude);
-  if (nearest.distance > SERVICE_RADIUS_METERS) {
+  const configSnap = await db.collection("config").doc("app").get();
+  const config = configSnap.exists ? (configSnap.data() as FirebaseFirestore.DocumentData) : {};
+  // Identity gate: email/password accounts must have proved they own the
+  // address (Google accounts arrive verified). Admins can switch this off with
+  // config.requireVerifiedEmail=false, e.g. while an email provider is down.
+  if (config.requireVerifiedEmail !== false && request.auth?.token?.email_verified !== true) {
+    throw new HttpsError(
+      "failed-precondition",
+      "Verify your email address before placing an order. Check your inbox for the verification link."
+    );
+  }
+  const resolved = resolveDeliveryZone(latitude, longitude, deliveryZonesFromConfig(config));
+  if (!resolved.zone) {
     throw new HttpsError(
       "failed-precondition",
       "This delivery address is outside our service area."
     );
   }
-  if (nearest.distance < CENTROID_PLACEHOLDER_METERS) {
+  if (resolved.nearestCentreDistance < CENTROID_PLACEHOLDER_METERS) {
     throw new HttpsError(
       "invalid-argument",
       "Please pin your exact delivery location on the map."
     );
   }
+  const nearest = { name: resolved.zone.name };
   const seen = new Set<string>();
   for (const item of items) {
     if (
@@ -329,9 +569,18 @@ export const placeOrder = onCall({ region: REGION, enforceAppCheck: process.env.
   if (user.isActive === false) {
     throw new HttpsError("permission-denied", "Your account is deactivated. Contact support.");
   }
+  const customerName = String(user.name ?? "").trim();
+  if (!customerName) {
+    throw new HttpsError("failed-precondition", "Add your name to your profile before ordering.");
+  }
+  const customerMobile = normalizeIndianMobile(user.phone);
+  if (!customerMobile) {
+    throw new HttpsError(
+      "failed-precondition",
+      "Add a valid 10-digit mobile number to your profile before ordering."
+    );
+  }
 
-  const configSnap = await db.collection("config").doc("app").get();
-  const config = configSnap.exists ? (configSnap.data() as FirebaseFirestore.DocumentData) : {};
   if (config.storeOpen === false) {
     throw new HttpsError("failed-precondition", "The store is currently closed. Please try later.");
   }
@@ -359,7 +608,6 @@ export const placeOrder = onCall({ region: REGION, enforceAppCheck: process.env.
   const minimumOrderAmount = Number(config.minimumOrderAmount ?? 0);
 
   const otp = String(randomInt(1000, 10000));
-  const orderRef = db.collection("orders").doc();
   const lockRef = db.collection("orderLocks").doc(uid);
 
   const totals = await db.runTransaction(async (tx) => {
@@ -393,7 +641,7 @@ export const placeOrder = onCall({ region: REGION, enforceAppCheck: process.env.
           `"${product.name}" is a prescription medicine and can't be ordered in the app yet.`
         );
       }
-      if (product.isActive === false) {
+      if (!isProductSellable(product)) {
         throw new HttpsError(
           "failed-precondition",
           `"${product.name}" is not currently available for purchase.`
@@ -412,7 +660,8 @@ export const placeOrder = onCall({ region: REGION, enforceAppCheck: process.env.
           `"${product.name}" has only ${availableStock} units available for purchase.`
         );
       }
-      const price = Number(product.price ?? 0);
+      const listPrice = Number(product.price ?? 0);
+      const price = effectivePrice(product);
       if (!Number.isFinite(price) || price <= 0) {
         throw new HttpsError(
           "failed-precondition",
@@ -448,6 +697,8 @@ export const placeOrder = onCall({ region: REGION, enforceAppCheck: process.env.
         productId: snap.id,
         name: String(product.name ?? ""),
         price,
+        // The undiscounted price, for receipts. `price` is what was charged.
+        listPrice,
         quantity: item.quantity,
       };
     });
@@ -466,8 +717,9 @@ export const placeOrder = onCall({ region: REGION, enforceAppCheck: process.env.
     tx.set(lockRef, { orderId: orderRef.id, updatedAt: now });
     tx.set(orderRef, {
       customerId: uid,
-      customerName: String(user.name ?? ""),
-      customerPhone: String(user.phone ?? ""),
+      customerName,
+      // Always +91-prefixed so riders can call or WhatsApp it as stored.
+      customerPhone: `+91${customerMobile}`,
       deliveryAddress,
       deliveryInstructions: deliveryInstructions || null,
       // Derived from the pinned coordinates (not the profile's village) so a
@@ -514,7 +766,7 @@ export const cancelOrder = onCall({ region: REGION, enforceAppCheck: process.env
   if (!uid) {
     throw new HttpsError("unauthenticated", "Sign in to cancel an order.");
   }
-  checkRateLimit(uid, "cancelOrder");
+  await checkRateLimit(uid, "cancelOrder");
 
   const orderId = String(request.data?.orderId ?? "").trim();
   const reason = String(request.data?.reason ?? "Cancelled by customer").trim();
@@ -545,6 +797,15 @@ export const cancelOrder = onCall({ region: REGION, enforceAppCheck: process.env
       throw new HttpsError(
         "failed-precondition",
         `Order cannot be cancelled once in status '${order.status}'.`
+      );
+    }
+
+    // A closed order must never be re-cancelled: cancelling a delivered order
+    // would release stock that the delivery already consumed.
+    if (order.status === "delivered" || order.status === "cancelled") {
+      throw new HttpsError(
+        "failed-precondition",
+        `Order is already ${order.status} and can't be cancelled.`
       );
     }
 
@@ -585,7 +846,7 @@ export const reportDeliveryFailure = onCall({ region: REGION, enforceAppCheck: p
   if (!uid) {
     throw new HttpsError("unauthenticated", "Sign in first.");
   }
-  checkRateLimit(uid, "reportDeliveryFailure");
+  await checkRateLimit(uid, "reportDeliveryFailure");
 
   const orderId = String(request.data?.orderId ?? "").trim();
   const reasonInput = String(request.data?.reason ?? "").trim();
@@ -596,6 +857,7 @@ export const reportDeliveryFailure = onCall({ region: REGION, enforceAppCheck: p
   if (!orderId) {
     throw new HttpsError("invalid-argument", "Order ID is required.");
   }
+  await assertActiveRider(uid);
 
   const orderRef = db.collection("orders").doc(orderId);
 
@@ -638,13 +900,15 @@ export const verifyDeliveryOtp = onCall({ region: REGION, enforceAppCheck: proce
   if (!uid) {
     throw new HttpsError("unauthenticated", "Sign in first.");
   }
-  checkRateLimit(uid, "verifyDeliveryOtp");
+  await checkRateLimit(uid, "verifyDeliveryOtp");
 
   const orderId = String(request.data?.orderId ?? "");
   const otp = String(request.data?.otp ?? "").trim();
   if (!orderId || !/^\d{4}$/.test(otp)) {
     throw new HttpsError("invalid-argument", "Order ID and a 4-digit OTP are required.");
   }
+  await assertActiveRider(uid);
+  const riderLocation = parseRiderLocation(request.data?.location);
 
   const orderRef = db.collection("orders").doc(orderId);
 
@@ -668,6 +932,26 @@ export const verifyDeliveryOtp = onCall({ region: REGION, enforceAppCheck: proce
       throw new HttpsError("failed-precondition", "Order is not out for delivery.");
     }
 
+    // COD: the rider must confirm the exact amount collected. Checked before
+    // the OTP so a mistaken amount never burns one of the OTP attempts, and
+    // recorded below so a later dispute can be traced to a figure the rider
+    // confirmed rather than one the server assumed.
+    const rawCollected = request.data?.collectedAmount;
+    const collectedAmount = typeof rawCollected === "number" ? rawCollected : NaN;
+    if (!Number.isFinite(collectedAmount) || collectedAmount < 0) {
+      throw new HttpsError(
+        "invalid-argument",
+        "Confirm the cash you collected before completing the delivery."
+      );
+    }
+    const amountDue = Number(order.totalAmount ?? 0);
+    if (Math.round(collectedAmount * 100) !== Math.round(amountDue * 100)) {
+      throw new HttpsError(
+        "failed-precondition",
+        `Collect exactly ₹${amountDue} from the customer. If they can't pay, report the delivery as failed.`
+      );
+    }
+
     const privateRef = orderRef.collection("private").doc("delivery");
     const privateSnap = await tx.get(privateRef);
     if (!privateSnap.exists) {
@@ -678,6 +962,13 @@ export const verifyDeliveryOtp = onCall({ region: REGION, enforceAppCheck: proce
     // later rate changes never reprice a rider's history.
     const configSnap = await tx.get(db.collection("config").doc("app"));
     const riderPayout = Number(configSnap.data()?.riderPayoutPerDelivery ?? 30);
+
+    // An expired code is refused before it is compared, so the rider's
+    // attempts aren't spent on a code that can no longer work.
+    const expiresAtMs = secret.expiresAt instanceof Timestamp ? secret.expiresAt.toMillis() : 0;
+    if (expiresAtMs > 0 && expiresAtMs < Date.now()) {
+      return { kind: "expired" as const };
+    }
 
     const totalAttempts = Number(secret.totalAttempts ?? secret.attempts ?? 0);
     if (totalAttempts >= MAX_OTP_TOTAL_ATTEMPTS) {
@@ -692,7 +983,7 @@ export const verifyDeliveryOtp = onCall({ region: REGION, enforceAppCheck: proce
     // A lockout that has expired starts a fresh window of attempts.
     const windowAttempts = lockedUntilMs > 0 ? 0 : Number(secret.attempts ?? 0);
 
-    if (secret.otp !== otp) {
+    if (!safeEqual(String(secret.otp ?? ""), otp)) {
       const newWindow = windowAttempts + 1;
       const lockNow = newWindow >= MAX_OTP_ATTEMPTS;
       tx.update(privateRef, {
@@ -752,10 +1043,38 @@ export const verifyDeliveryOtp = onCall({ region: REGION, enforceAppCheck: proce
     }
 
     const deliveredNow = Timestamp.now();
+    // Where the handover happened, and how far that is from the customer's
+    // pin. Recorded for disputes; a far handover is flagged, never blocked.
+    let proof: Record<string, unknown> = {};
+    if (riderLocation) {
+      // An order without a pin has null coordinates; Number(null) is 0, which
+      // would read as a real point off the coast of Africa.
+      const hasPin =
+        typeof order.latitude === "number" &&
+        typeof order.longitude === "number" &&
+        isValidCoordinate(order.latitude, order.longitude);
+      const distance = hasPin
+        ? Math.round(haversineMeters(riderLocation.lat, riderLocation.lng, order.latitude, order.longitude))
+        : null;
+      proof = {
+        deliveryLocation: {
+          lat: riderLocation.lat,
+          lng: riderLocation.lng,
+          accuracy: riderLocation.accuracy,
+          at: deliveredNow,
+        },
+        deliveryDistanceMeters: distance,
+        deliveryFar: distance !== null && distance > DELIVERY_FAR_METERS,
+      };
+    }
     tx.update(orderRef, {
+      ...proof,
       status: "delivered",
+      // The reservation was consumed by this delivery (see the "sale" ledger
+      // entries above) — flag it so no later cancel can release it again.
+      stockReleased: true,
       paymentStatus: "paid",
-      codCollectedAmount: Number(order.totalAmount ?? 0),
+      codCollectedAmount: collectedAmount,
       codCollectedBy: uid,
       codCollectedAt: deliveredNow,
       riderPayout,
@@ -766,6 +1085,11 @@ export const verifyDeliveryOtp = onCall({ region: REGION, enforceAppCheck: proce
   });
 
   switch (outcome.kind) {
+    case "expired":
+      throw new HttpsError(
+        "failed-precondition",
+        "This delivery code has expired. Ask the customer to open their order and get a new code."
+      );
     case "hard_locked":
       throw new HttpsError(
         "resource-exhausted",
@@ -843,7 +1167,7 @@ export const acceptOrder = onCall({ region: REGION, enforceAppCheck: process.env
   if (!uid) {
     throw new HttpsError("unauthenticated", "Sign in first.");
   }
-  checkRateLimit(uid, "acceptOrder");
+  await checkRateLimit(uid, "acceptOrder");
   if (request.auth?.token?.delivery !== true) {
     throw new HttpsError("permission-denied", "Only delivery partners can accept orders.");
   }
@@ -865,6 +1189,12 @@ export const acceptOrder = onCall({ region: REGION, enforceAppCheck: process.env
     throw new HttpsError("failed-precondition", "Go on-duty before accepting orders.");
   }
 
+  const configSnap = await db.collection("config").doc("app").get();
+  const configuredMax = Number(configSnap.data()?.maxActiveOrdersPerRider);
+  const maxActiveOrders = Number.isFinite(configuredMax) && configuredMax >= 1
+    ? Math.min(Math.floor(configuredMax), 20)
+    : DEFAULT_MAX_ACTIVE_ORDERS_PER_RIDER;
+
   const orderRef = db.collection("orders").doc(orderId);
   const outcome = await db.runTransaction(async (tx) => {
     const snap = await tx.get(orderRef);
@@ -881,6 +1211,18 @@ export const acceptOrder = onCall({ region: REGION, enforceAppCheck: process.env
       return "taken";
     }
 
+    // A rider may only hold so many orders at once. Counted inside the
+    // transaction so two simultaneous accepts can't both slip under the cap.
+    const heldSnap = await tx.get(
+      db.collection("orders")
+        .where("deliveryBoyId", "==", uid)
+        .where("status", "in", RIDER_HELD_STATUSES)
+    );
+    if (heldSnap.size >= maxActiveOrders) {
+      return "at_capacity";
+    }
+
+    tx.delete(db.collection("orderOffers").doc(orderId));
     tx.update(orderRef, {
       status: "assigned",
       deliveryBoyId: uid,
@@ -894,8 +1236,299 @@ export const acceptOrder = onCall({ region: REGION, enforceAppCheck: process.env
   if (outcome === "taken") {
     throw new HttpsError("failed-precondition", "This order was already accepted by another rider.");
   }
+  if (outcome === "at_capacity") {
+    throw new HttpsError(
+      "failed-precondition",
+      `You already have ${maxActiveOrders} active deliveries. Finish one before accepting another.`
+    );
+  }
   return { success: true };
 });
+
+/**
+ * A rider declines an offer. Persisted (deliveryBoys/{uid}/rejectedOffers) so
+ * the offer stays hidden for that rider across restarts and re-broadcasts,
+ * while remaining available to every other rider. Purely a per-rider hide: it
+ * never touches the order, so it can't affect who else may accept it.
+ */
+export const rejectOrderOffer = onCall({ region: REGION, enforceAppCheck: process.env.FUNCTIONS_EMULATOR !== "true" }, async (request) => {
+  const uid = request.auth?.uid;
+  if (!uid) {
+    throw new HttpsError("unauthenticated", "Sign in first.");
+  }
+  await checkRateLimit(uid, "rejectOrderOffer");
+  if (request.auth?.token?.delivery !== true) {
+    throw new HttpsError("permission-denied", "Only delivery partners can reject offers.");
+  }
+  const orderId = String(request.data?.orderId ?? "");
+  if (!orderId || orderId.includes("/")) {
+    throw new HttpsError("invalid-argument", "orderId is required.");
+  }
+  const riderSnap = await db.collection("deliveryBoys").doc(uid).get();
+  if (!riderSnap.exists || riderSnap.data()?.isActive === false) {
+    throw new HttpsError("permission-denied", "Your account is deactivated. Contact support.");
+  }
+  // Only real, still-open offers can be rejected, so the subcollection can't
+  // be padded with arbitrary ids.
+  const offer = await db.collection("orderOffers").doc(orderId).get();
+  if (!offer.exists) {
+    return { success: true };
+  }
+  await db.collection("deliveryBoys").doc(uid).collection("rejectedOffers").doc(orderId).set({
+    rejectedAt: Timestamp.now(),
+    // Lets a scheduled cleanup (or a TTL policy) drop entries once the offer is long gone.
+    expireAt: Timestamp.fromMillis(Date.now() + 7 * 24 * 60 * 60 * 1000),
+  });
+  return { success: true };
+});
+
+/**
+ * Moves the rider's own order one step forward (assigned → picked_up →
+ * out_for_delivery) and records when and — if the app could get a fix — where.
+ * This is the only path for those transitions (the rules no longer let a rider
+ * write status directly), so the timestamps and locations can't be skipped.
+ * Going out for delivery also starts the delivery code's validity window.
+ * 'delivered' remains verifyDeliveryOtp's alone.
+ */
+export const advanceOrderStatus = onCall({ region: REGION, enforceAppCheck: process.env.FUNCTIONS_EMULATOR !== "true" }, async (request) => {
+  const uid = request.auth?.uid;
+  if (!uid) {
+    throw new HttpsError("unauthenticated", "Sign in first.");
+  }
+  await checkRateLimit(uid, "advanceOrderStatus");
+
+  const orderId = String(request.data?.orderId ?? "").trim();
+  if (!orderId) {
+    throw new HttpsError("invalid-argument", "orderId is required.");
+  }
+  const location = parseRiderLocation(request.data?.location);
+  await assertActiveRider(uid);
+
+  const NEXT: Record<string, string> = { assigned: "picked_up", picked_up: "out_for_delivery" };
+  const orderRef = db.collection("orders").doc(orderId);
+  const privateRef = orderRef.collection("private").doc("delivery");
+
+  const status = await db.runTransaction(async (tx) => {
+    const snap = await tx.get(orderRef);
+    if (!snap.exists) {
+      throw new HttpsError("not-found", "Order not found.");
+    }
+    const order = snap.data() as FirebaseFirestore.DocumentData;
+    if (order.deliveryBoyId !== uid) {
+      throw new HttpsError("permission-denied", "This order isn't assigned to you.");
+    }
+    const requested = String(request.data?.status ?? "").trim();
+    const next = NEXT[order.status];
+    if (!next) {
+      throw new HttpsError(
+        "failed-precondition",
+        order.status === "cancelled"
+          ? "This order was cancelled. Go back and check its status."
+          : `This order can't be moved on from '${order.status}'.`
+      );
+    }
+    // Idempotent retry: the client already asked for the state it is in.
+    if (requested && requested === order.status) {
+      return order.status as string;
+    }
+    if (requested && requested !== next) {
+      throw new HttpsError("failed-precondition", `The next step for this order is '${next}'.`);
+    }
+
+    const now = Timestamp.now();
+    const point = location
+      ? { lat: location.lat, lng: location.lng, accuracy: location.accuracy, at: now }
+      : null;
+    const update: Record<string, unknown> = { status: next, updatedAt: now };
+    if (next === "picked_up") {
+      update.pickedUpAt = now;
+      update.pickupLocation = point;
+    } else {
+      update.outForDeliveryAt = now;
+      update.dispatchLocation = point;
+    }
+    tx.update(orderRef, update);
+
+    if (next === "out_for_delivery") {
+      // The code starts counting down now; the customer can refresh it.
+      tx.set(
+        privateRef,
+        { expiresAt: Timestamp.fromMillis(now.toMillis() + OTP_VALID_MINUTES * 60_000) },
+        { merge: true }
+      );
+    }
+    return next;
+  });
+
+  return { success: true, status };
+});
+
+/**
+ * Gives the ordering customer a fresh delivery code — for a code that was
+ * shared by mistake or has expired. Resets the failed-attempt counters and, if
+ * the order is already out for delivery, restarts the validity window.
+ */
+export const regenerateDeliveryOtp = onCall({ region: REGION, enforceAppCheck: process.env.FUNCTIONS_EMULATOR !== "true" }, async (request) => {
+  const uid = request.auth?.uid;
+  if (!uid) {
+    throw new HttpsError("unauthenticated", "Sign in first.");
+  }
+  await checkRateLimit(uid, "regenerateDeliveryOtp");
+
+  const orderId = String(request.data?.orderId ?? "").trim();
+  if (!orderId) {
+    throw new HttpsError("invalid-argument", "orderId is required.");
+  }
+
+  const orderRef = db.collection("orders").doc(orderId);
+  const privateRef = orderRef.collection("private").doc("delivery");
+
+  return db.runTransaction(async (tx) => {
+    const [orderSnap, privateSnap] = await Promise.all([tx.get(orderRef), tx.get(privateRef)]);
+    if (!orderSnap.exists) {
+      throw new HttpsError("not-found", "Order not found.");
+    }
+    const order = orderSnap.data() as FirebaseFirestore.DocumentData;
+    if (order.customerId !== uid) {
+      throw new HttpsError("permission-denied", "You can only refresh the code for your own orders.");
+    }
+    if (!RIDER_HELD_STATUSES.includes(order.status)) {
+      throw new HttpsError(
+        "failed-precondition",
+        order.status === "pending"
+          ? "A delivery partner hasn't accepted this order yet."
+          : "This order is closed, so its delivery code can't be refreshed."
+      );
+    }
+    const secret = (privateSnap.data() ?? {}) as FirebaseFirestore.DocumentData;
+    const regenerations = Number(secret.regenerations ?? 0);
+    if (regenerations >= MAX_OTP_REGENERATIONS) {
+      throw new HttpsError(
+        "resource-exhausted",
+        "You've refreshed this code too many times. Contact support if you need help."
+      );
+    }
+
+    const now = Timestamp.now();
+    const otp = String(randomInt(1000, 10000));
+    const expiresAt = order.status === "out_for_delivery"
+      ? Timestamp.fromMillis(now.toMillis() + OTP_VALID_MINUTES * 60_000)
+      : null;
+    tx.set(
+      privateRef,
+      {
+        otp,
+        attempts: 0,
+        totalAttempts: 0,
+        lockedUntil: null,
+        regenerations: regenerations + 1,
+        regeneratedAt: now,
+        expiresAt,
+      },
+      { merge: true }
+    );
+    return { otp, expiresAtMs: expiresAt ? expiresAt.toMillis() : null };
+  });
+});
+
+/**
+ * Releases the stock reserved by a cancelled order and writes the "return"
+ * ledger entries. Idempotent: the order is re-read inside the transaction and
+ * `stockReleased` is set atomically with the stock writes. Throws on failure
+ * so callers can record it (see repairStockReleases).
+ */
+async function releaseOrderStock(
+  orderRef: FirebaseFirestore.DocumentReference,
+  orderId: string,
+  orderData: FirebaseFirestore.DocumentData
+): Promise<void> {
+  const itemsList = (orderData.items || []) as { productId: string; quantity: number }[];
+  if (itemsList.length === 0) return;
+  const productRefs = itemsList.map((item) => db.collection("products").doc(item.productId));
+
+  await db.runTransaction(async (tx) => {
+    // Re-read the order inside the tx: a stale snapshot would release the same
+    // reservation twice for a retried / concurrent delivery and eat other
+    // orders' reserved stock.
+    const [orderSnap, ...productSnaps] = await tx.getAll(orderRef, ...productRefs);
+    const fresh = orderSnap.data();
+    if (fresh?.stockReleased || fresh?.status === "delivered") return;
+
+    // cancelledBy carries who actually triggered this release (customer via
+    // cancelOrder, rider via reportDeliveryFailure, system via auto-expire).
+    const cancelActorType = orderData.cancelledBy === "customer"
+      ? "customer"
+      : orderData.cancelledBy === "rider"
+        ? "rider"
+        : orderData.cancelledBy === "admin"
+          ? "admin"
+          : "system";
+    const cancelActorId = orderData.cancelledBy === "rider"
+      ? (orderData.deliveryBoyId || "system")
+      : orderData.cancelledBy === "admin"
+        ? (orderData.cancelledById || "system")
+        : (orderData.customerId || "system");
+
+    for (let i = 0; i < itemsList.length; i++) {
+      const item = itemsList[i];
+      const prodSnap = productSnaps[i];
+      if (!prodSnap.exists) continue;
+      const prod = prodSnap.data() as FirebaseFirestore.DocumentData;
+      const stockVal = Number(prod.stock ?? 0);
+      const phys = Number(prod.physicalStock ?? stockVal);
+      const res = Number(prod.reservedStock ?? 0);
+
+      const newRes = Math.max(0, res - item.quantity);
+      const newAvail = phys - newRes;
+
+      tx.update(prodSnap.ref, {
+        reservedStock: newRes,
+        availableStock: newAvail,
+        stock: newAvail,
+        updatedAt: Timestamp.now(),
+      });
+
+      tx.set(db.collection("inventoryLogs").doc(), {
+        productId: item.productId,
+        adminId: cancelActorId,
+        actorType: cancelActorType,
+        orderId,
+        changeType: "return",
+        physicalDelta: 0,
+        reservedDelta: -item.quantity,
+        notes: `Order #${orderId} cancelled; reservation released.`,
+        timestamp: Timestamp.now(),
+      });
+    }
+    tx.set(orderRef, { stockReleased: true, stockReleaseFailed: FieldValue.delete() }, { merge: true });
+  });
+}
+
+/**
+ * Retries stock releases that failed inside onOrderWritten. Without this a
+ * transient error strands `reservedStock` and makes the product look sold out.
+ */
+export const repairStockReleases = onSchedule(
+  { region: REGION, schedule: "every 15 minutes" },
+  async () => {
+    const flagged = await db.collection("orders")
+      .where("stockReleaseFailed", "==", true)
+      .limit(ESCALATOR_BATCH_LIMIT)
+      .get();
+    for (const doc of flagged.docs) {
+      const order = doc.data();
+      try {
+        if (order.status !== "cancelled" || order.stockReleased) {
+          await doc.ref.update({ stockReleaseFailed: FieldValue.delete() });
+          continue;
+        }
+        await releaseOrderStock(doc.ref, doc.id, order);
+      } catch (e) {
+        console.error(`[STOCK_REPAIR_FAILED] order ${doc.id}:`, e);
+      }
+    }
+  }
+);
 
 /**
  * Automatically updates active order count and completed revenue.
@@ -905,6 +1538,12 @@ export const onOrderWritten = onDocumentWritten({ region: REGION, document: "ord
   const afterData = event.data?.after.data();
 
   const statsRef = db.collection("config").doc("dashboard_stats");
+
+  // Keep the rider-visible, PII-free offer in step with whether the order is
+  // still open for any rider to claim.
+  if (isOpenOffer(beforeData) !== isOpenOffer(afterData)) {
+    await syncOrderOffer(event.params.orderId, afterData);
+  }
 
   // 1. New Order Created (Initial status is 'pending')
   if (!beforeData && afterData) {
@@ -936,82 +1575,28 @@ export const onOrderWritten = onDocumentWritten({ region: REGION, document: "ord
     if (beforeStatus !== afterStatus) {
       // If transition to cancelled: release reserved stock and log return.
       // Guarded by `stockReleased` so a redelivered/retried trigger event
-      // can never double-release the same reservation.
-      if (afterStatus === "cancelled" && beforeStatus !== "cancelled" && !afterData.stockReleased) {
-        const itemsList = (afterData.items || []) as { productId: string; quantity: number }[];
-        if (itemsList.length > 0) {
-          const productRefs = itemsList.map(item => db.collection("products").doc(item.productId));
-          const orderRef = event.data!.after.ref;
-          try {
-            await db.runTransaction(async (tx) => {
-              // Re-read the order inside the tx: the event snapshot's
-              // `stockReleased` is stale for a retried / concurrent trigger
-              // delivery, which would release the same reservation twice and
-              // eat other orders' reserved stock.
-              const [orderSnap, ...productSnaps] = await tx.getAll(orderRef, ...productRefs);
-              if (orderSnap.data()?.stockReleased) return;
-              for (let i = 0; i < itemsList.length; i++) {
-                const item = itemsList[i];
-                const prodSnap = productSnaps[i];
-                if (prodSnap.exists) {
-                  const prod = prodSnap.data() as FirebaseFirestore.DocumentData;
-                  const stockVal = Number(prod.stock ?? 0);
-                  const phys = Number(prod.physicalStock ?? stockVal);
-                  const res = Number(prod.reservedStock ?? 0);
-
-                  const newRes = Math.max(0, res - item.quantity);
-                  const newAvail = phys - newRes;
-
-                  tx.update(prodSnap.ref, {
-                    reservedStock: newRes,
-                    availableStock: newAvail,
-                    stock: newAvail,
-                    updatedAt: Timestamp.now()
-                  });
-
-                  // Write inventory log for the return (cancellation)
-                  const ledgerRef = db.collection("inventoryLogs").doc();
-                  // cancelledBy carries who actually triggered this release
-                  // (customer via cancelOrder, rider via reportDeliveryFailure,
-                  // system via auto-expire) — attribute both the actor id and
-                  // actorType to whoever that really was, instead of always
-                  // blaming the customer or falling back to the DTO's
-                  // "admin" default.
-                  const cancelActorType = afterData.cancelledBy === "customer"
-                    ? "customer"
-                    : afterData.cancelledBy === "rider"
-                      ? "rider"
-                      : afterData.cancelledBy === "admin"
-                        ? "admin"
-                        : "system";
-                  const cancelActorId = afterData.cancelledBy === "rider"
-                    ? (afterData.deliveryBoyId || "system")
-                    : afterData.cancelledBy === "admin"
-                      ? (afterData.cancelledById || "system")
-                      : (afterData.customerId || "system");
-                  tx.set(ledgerRef, {
-                    productId: item.productId,
-                    adminId: cancelActorId,
-                    actorType: cancelActorType,
-                    orderId: event.params.orderId,
-                    changeType: "return",
-                    physicalDelta: 0,
-                    reservedDelta: -item.quantity,
-                    notes: `Order #${event.params.orderId} cancelled; reservation released.`,
-                    timestamp: Timestamp.now()
-                  });
-                }
-              }
-              tx.set(orderRef, { stockReleased: true }, { merge: true });
-            });
-          } catch (err) {
-            console.error(
-              `[STOCK_RELEASE_FAILED] order ${event.params.orderId} was cancelled but its reserved ` +
-              `stock could not be released — reservedStock is likely stranded and needs a manual ` +
-              `inventoryLogs correction.`,
-              err
-            );
-          }
+      // can never double-release the same reservation, and by the delivered
+      // check because a delivery already consumed the reservation.
+      if (
+        afterStatus === "cancelled" &&
+        beforeStatus !== "cancelled" &&
+        beforeStatus !== "delivered" &&
+        !afterData.stockReleased
+      ) {
+        const orderRef = event.data!.after.ref;
+        try {
+          await releaseOrderStock(orderRef, event.params.orderId, afterData);
+        } catch (err) {
+          console.error(
+            `[STOCK_RELEASE_FAILED] order ${event.params.orderId} was cancelled but its reserved ` +
+            `stock could not be released; repairStockReleases will retry.`,
+            err
+          );
+          // Flag the order so the scheduled repair job picks it up. Status is
+          // unchanged, so this write does not re-enter the branch above.
+          await orderRef
+            .set({ stockReleaseFailed: true }, { merge: true })
+            .catch((e) => console.error("Failed to flag stockReleaseFailed:", e));
         }
       }
 
@@ -1131,11 +1716,16 @@ export const onRiderWritten = onDocumentWritten({ region: REGION, document: "del
     try {
       if (afterShouldHaveClaim) {
         await auth.setCustomUserClaims(riderId, { role: "delivery", delivery: true });
+        await auth.updateUser(riderId, { disabled: false });
       } else {
         await auth.setCustomUserClaims(riderId, { role: null, delivery: null });
+        // Claims alone linger until the ID token expires (~1h): disable the
+        // account and revoke refresh tokens so the session actually ends.
+        await auth.updateUser(riderId, { disabled: true });
+        await auth.revokeRefreshTokens(riderId);
       }
     } catch (e) {
-      console.error(`Failed to set custom claims for rider ${riderId}:`, e);
+      console.error(`Failed to sync auth state for rider ${riderId}:`, e);
     }
   }
 });
@@ -1149,8 +1739,8 @@ export const onProductWritten = onDocumentWritten({ region: REGION, document: "p
 
   const statsRef = db.collection("config").doc("dashboard_stats");
 
-  const beforeExists = !!beforeData && beforeData.isActive !== false;
-  const afterExists = !!afterData && afterData.isActive !== false;
+  const beforeExists = !!beforeData && isProductSellable(beforeData);
+  const afterExists = !!afterData && isProductSellable(afterData);
 
   let delta = 0;
   if (!beforeExists && afterExists) {
@@ -1187,11 +1777,14 @@ export const onAdminWritten = onDocumentWritten({ region: REGION, document: "adm
   try {
     if (afterExists) {
       await auth.setCustomUserClaims(adminId, { role: "admin", admin: true });
+      await auth.updateUser(adminId, { disabled: false });
     } else {
       await auth.setCustomUserClaims(adminId, { role: null, admin: null });
+      await auth.updateUser(adminId, { disabled: true });
+      await auth.revokeRefreshTokens(adminId);
     }
   } catch (e) {
-    console.error(`Failed to set custom claims for admin ${adminId}:`, e);
+    console.error(`Failed to sync auth state for admin ${adminId}:`, e);
   }
 });
 
@@ -1204,7 +1797,7 @@ export const createRiderLogin = onCall({ region: REGION, enforceAppCheck: proces
   if (!uid) {
     throw new HttpsError("unauthenticated", "Sign in first.");
   }
-  checkRateLimit(uid, "createRiderLogin");
+  await checkRateLimit(uid, "createRiderLogin");
 
   // Verify that the caller is an active admin
   const adminSnap = await db.collection("admins").doc(uid).get();
@@ -1242,27 +1835,198 @@ export const createRiderLogin = onCall({ region: REGION, enforceAppCheck: proces
 
   const riderUid = userRecord.uid;
 
-  // Create document in deliveryBoys with document ID = riderUid
-  const now = Timestamp.now();
-  await db.collection("deliveryBoys").doc(riderUid).set({
-    uid: riderUid,
-    name,
-    email,
-    phone,
-    village,
-    role: "delivery",
-    isActive: true,
-    onDuty: true,
-    vehicleNo,
-    licenseNo,
-    createdAt: now,
-    updatedAt: now,
-  });
+  try {
+    // Create document in deliveryBoys with document ID = riderUid
+    const now = Timestamp.now();
+    await db.collection("deliveryBoys").doc(riderUid).set({
+      uid: riderUid,
+      name,
+      email,
+      phone,
+      village,
+      role: "delivery",
+      isActive: true,
+      onDuty: true,
+      vehicleNo,
+      licenseNo,
+      createdAt: now,
+      updatedAt: now,
+    });
 
-  // Set custom claims (redundant but safe)
-  await auth.setCustomUserClaims(riderUid, { role: "delivery", delivery: true });
+    // Set custom claims (redundant but safe)
+    await auth.setCustomUserClaims(riderUid, { role: "delivery", delivery: true });
+  } catch (error) {
+    // Don't leave an Auth account with no rider doc behind: the admin would
+    // retry and hit "email already exists" with no way to recover.
+    console.error(`[RIDER_CREATE_FAILED] rolling back Auth user ${riderUid}:`, error);
+    await db.collection("deliveryBoys").doc(riderUid).delete().catch(() => undefined);
+    await auth.deleteUser(riderUid).catch(() => undefined);
+    throw new HttpsError("internal", "Failed to create the rider. Please try again.");
+  }
 
   return { success: true, uid: riderUid, temporaryPassword: password };
+});
+
+// ── Geocoding proxy ─────────────────────────────────────────────────
+// The app used to call the public Nominatim endpoint straight from every
+// device (no caching, an inconsistent User-Agent, no throttle), which that
+// service's usage policy doesn't allow at scale. The app now calls these
+// callables instead: they identify the app, cache results in Firestore, are
+// App Check + rate limited per user, and are the single place to swap in a
+// paid geocoder — set GEOCODER_BASE_URL (Nominatim-compatible API) and
+// GEOCODER_CONTACT_EMAIL in the function's environment.
+const GEOCODER_BASE_URL = (process.env.GEOCODER_BASE_URL ?? "https://nominatim.openstreetmap.org").replace(/\/+$/, "");
+const GEOCODER_CONTACT = process.env.GEOCODER_CONTACT_EMAIL ?? "support@jcmart.app";
+const GEOCODER_TIMEOUT_MS = 8_000;
+const GEOCODE_CACHE_DAYS = 30;
+const SEARCH_RESULT_LIMIT = 6;
+
+async function geocoderGet(path: string, params: Record<string, string>): Promise<any> {
+  const url = `${GEOCODER_BASE_URL}${path}?${new URLSearchParams({ format: "jsonv2", ...params }).toString()}`;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), GEOCODER_TIMEOUT_MS);
+  try {
+    const res = await fetch(url, {
+      headers: { "User-Agent": `JCMart/1.0 (${GEOCODER_CONTACT})`, "Accept-Language": "en" },
+      signal: controller.signal,
+    });
+    if (!res.ok) throw new Error(`geocoder responded ${res.status}`);
+    return await res.json();
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function readGeocodeCache(key: string): Promise<any | null> {
+  const snap = await db.collection("geocodeCache").doc(key).get();
+  const data = snap.data();
+  if (!data || !(data.fetchedAt instanceof Timestamp)) return null;
+  const ageMs = Date.now() - data.fetchedAt.toMillis();
+  return ageMs < GEOCODE_CACHE_DAYS * 24 * 3600 * 1000 ? data.value : null;
+}
+
+function writeGeocodeCache(key: string, value: unknown): Promise<unknown> {
+  return db
+    .collection("geocodeCache")
+    .doc(key)
+    .set({
+      value,
+      fetchedAt: Timestamp.now(),
+      // TTL policy field (firestore.indexes.json): stale entries are dropped by Firestore.
+      expireAt: Timestamp.fromMillis(Date.now() + 60 * 24 * 60 * 60 * 1000),
+    })
+    .catch((e) => console.error("[GEOCODE_CACHE_WRITE_FAILED]", e));
+}
+
+/** Address details for a pinned point, to pre-fill the address form. Best
+ * effort: the client treats any failure as "fill it in yourself". */
+export const reverseGeocode = onCall({ region: REGION, enforceAppCheck: process.env.FUNCTIONS_EMULATOR !== "true" }, async (request) => {
+  const uid = request.auth?.uid;
+  if (!uid) {
+    throw new HttpsError("unauthenticated", "Sign in first.");
+  }
+  await checkRateLimit(uid, "geocode");
+
+  const lat = typeof request.data?.lat === "number" ? request.data.lat : NaN;
+  const lng = typeof request.data?.lng === "number" ? request.data.lng : NaN;
+  if (!isValidCoordinate(lat, lng)) {
+    throw new HttpsError("invalid-argument", "A valid location is required.");
+  }
+
+  // ~11 m grid: neighbouring pins share an entry, which is what makes the
+  // cache effective in a small service area.
+  const cacheKey = `rev_${lat.toFixed(4)}_${lng.toFixed(4)}`;
+  const cached = await readGeocodeCache(cacheKey);
+  if (cached) return cached;
+
+  let body: any;
+  try {
+    body = await geocoderGet("/reverse", {
+      lat: String(lat),
+      lon: String(lng),
+      zoom: "18",
+      addressdetails: "1",
+    });
+  } catch (e) {
+    console.error("[GEOCODE_REVERSE_FAILED]", e);
+    throw new HttpsError("unavailable", "Address lookup is unavailable right now.");
+  }
+
+  const address = body?.address ?? {};
+  const result = {
+    road: String(address.road ?? address.suburb ?? address.neighbourhood ?? ""),
+    mandal: String(address.county ?? address.suburb ?? address.neighbourhood ?? ""),
+    district: String(address.state_district ?? address.county ?? address.state ?? ""),
+    pincode: String(address.postcode ?? ""),
+    label: String(body?.display_name ?? ""),
+  };
+  await writeGeocodeCache(cacheKey, result);
+  return result;
+});
+
+/** Address / landmark search inside the delivery area, so a customer who can't
+ * (or won't) use GPS can still find their house. */
+export const searchAddress = onCall({ region: REGION, enforceAppCheck: process.env.FUNCTIONS_EMULATOR !== "true" }, async (request) => {
+  const uid = request.auth?.uid;
+  if (!uid) {
+    throw new HttpsError("unauthenticated", "Sign in first.");
+  }
+  await checkRateLimit(uid, "geocode");
+
+  const query = String(request.data?.query ?? "").trim().replace(/\s+/g, " ");
+  if (query.length < 3 || query.length > 100) {
+    throw new HttpsError("invalid-argument", "Enter at least 3 characters to search.");
+  }
+
+  const configSnap = await db.collection("config").doc("app").get();
+  const zones = deliveryZonesFromConfig(configSnap.exists ? (configSnap.data() as FirebaseFirestore.DocumentData) : {});
+
+  // Bound the search to the delivery area (each zone's circle, as a box) so
+  // suggestions are places we can actually reach.
+  const degPerMeterLat = 1 / 111_320;
+  let west = Infinity, east = -Infinity, south = Infinity, north = -Infinity;
+  for (const z of zones) {
+    const dLat = z.radiusMeters * degPerMeterLat;
+    const dLng = z.radiusMeters * degPerMeterLat / Math.max(Math.cos((z.latitude * Math.PI) / 180), 0.01);
+    west = Math.min(west, z.longitude - dLng);
+    east = Math.max(east, z.longitude + dLng);
+    south = Math.min(south, z.latitude - dLat);
+    north = Math.max(north, z.latitude + dLat);
+  }
+
+  const cacheKey = `q_${createHash("sha1").update(`${query.toLowerCase()}|${west}|${south}|${east}|${north}`).digest("hex")}`;
+  let places = await readGeocodeCache(cacheKey);
+  if (!places) {
+    let body: any;
+    try {
+      body = await geocoderGet("/search", {
+        q: query,
+        limit: String(SEARCH_RESULT_LIMIT),
+        countrycodes: "in",
+        viewbox: `${west},${north},${east},${south}`,
+        bounded: "1",
+      });
+    } catch (e) {
+      console.error("[GEOCODE_SEARCH_FAILED]", e);
+      throw new HttpsError("unavailable", "Address search is unavailable right now.");
+    }
+    places = (Array.isArray(body) ? body : [])
+      .map((r: any) => ({
+        label: String(r?.display_name ?? "").trim(),
+        lat: Number(r?.lat),
+        lng: Number(r?.lon),
+      }))
+      .filter((p: any) => p.label && isValidCoordinate(p.lat, p.lng))
+      .slice(0, SEARCH_RESULT_LIMIT);
+    await writeGeocodeCache(cacheKey, places);
+  }
+
+  return {
+    places: places.map((p: any) => {
+      const resolved = resolveDeliveryZone(p.lat, p.lng, zones);
+      return { ...p, zone: resolved.zone?.name ?? null };
+    }),
+  };
 });
 
 /**
@@ -1273,11 +2037,11 @@ export const createRiderLogin = onCall({ region: REGION, enforceAppCheck: proces
 export const getCloudinarySignature = onCall(
   { region: REGION, enforceAppCheck: process.env.FUNCTIONS_EMULATOR !== "true" },
   async (request) => {
-    const uid = request.auth?.uid;
-    if (!uid) {
-      throw new HttpsError("unauthenticated", "Sign in first.");
-    }
-    checkRateLimit(uid, "getCloudinarySignature");
+  const uid = request.auth?.uid;
+  if (!uid) {
+    throw new HttpsError("unauthenticated", "Sign in first.");
+  }
+  await checkRateLimit(uid, "getCloudinarySignature");
 
     const adminSnap = await db.collection("admins").doc(uid).get();
     if (!adminSnap.exists || adminSnap.data()?.isActive === false) {
@@ -1355,7 +2119,7 @@ export const escalateStaleOrders = onSchedule(
       await sendPushToTokens(
         tokens,
         "Delivery still needed nearby",
-        `Order from ${order.customerName ?? "a customer"} in ${order.village ?? ""} is still waiting for a rider.`,
+        `Order from ${firstName(order.customerName)} in ${order.village ?? ""} is still waiting for a rider.`,
         { orderId: doc.id, type: "new_order_offer" },
         tokenOwners
       );
@@ -1431,7 +2195,7 @@ export const deleteAccount = onCall(
     if (!uid) {
       throw new HttpsError("unauthenticated", "Sign in to delete your account.");
     }
-    checkRateLimit(uid, "deleteAccount");
+    await checkRateLimit(uid, "deleteAccount");
 
     // Rider and admin logins are provisioned and removed by an administrator.
     // Letting one delete its own auth user would strand its deliveryBoys /

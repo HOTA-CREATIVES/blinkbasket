@@ -12,6 +12,8 @@ import '../../../core/utils/route_generator.dart';
 import '../../profile/screens/user_profile_screen.dart';
 import 'rider_map_screen.dart';
 import 'earnings_screen.dart';
+import '../../../core/utils/app_exception.dart';
+import '../../../core/utils/money.dart';
 
 class DeliveryHomeScreen extends StatefulWidget {
   const DeliveryHomeScreen({super.key});
@@ -23,9 +25,9 @@ class DeliveryHomeScreen extends StatefulWidget {
 class _DeliveryHomeScreenState extends State<DeliveryHomeScreen> {
   int _currentIndex = 0;
 
-  // Blinkit-style "Reject" is a pure local dismiss — no backend call, no
-  // persisted state. An offer reappearing here on the next broadcast retry
-  // (see escalateStaleOrders) is correct behavior, not a bug.
+  // "Reject" hides the offer at once (this set) and is also saved for the
+  // rider (rejectOrderOffer), so it stays hidden after a restart or a
+  // re-broadcast (see escalateStaleOrders). Other riders still see it.
   final Set<String> _dismissedOfferIds = {};
 
   @override
@@ -213,10 +215,10 @@ class _DeliveryHomeScreenState extends State<DeliveryHomeScreen> {
           return const Scaffold(body: SkeletonList());
         }
         if (snapshot.hasError) {
-          return EmptyState(
-            icon: Icons.error_outline_rounded,
-            title: 'Unable to load tasks',
-            message: snapshot.error.toString(),
+          return EmptyState.error(
+            title: "Couldn't load your tasks",
+            message: userMessageFor(snapshot.error),
+            onAction: () => orderProvider.retryDeliveryOrders(user.uid),
           );
         }
 
@@ -267,13 +269,16 @@ class _DeliveryHomeScreenState extends State<DeliveryHomeScreen> {
       OrderProvider orderProvider, ColorScheme scheme) {
     if (!user.onDuty) return const SizedBox.shrink();
 
-    return StreamBuilder<List<Order>>(
+    return StreamBuilder<Set<String>>(
+      stream: orderProvider.streamRejectedOfferIds(user.uid),
+      builder: (context, rejectedSnapshot) => StreamBuilder<List<Order>>(
       stream: orderProvider.streamIncomingOffers(),
       builder: (context, snapshot) {
         if (snapshot.hasError) return const SizedBox.shrink();
+        final rejected = rejectedSnapshot.data ?? const <String>{};
 
         final offers = (snapshot.data ?? [])
-            .where((o) => !_dismissedOfferIds.contains(o.id))
+            .where((o) => !_dismissedOfferIds.contains(o.id) && !rejected.contains(o.id))
             .toList()
           ..sort((a, b) {
             final aLocal =
@@ -343,6 +348,7 @@ class _DeliveryHomeScreenState extends State<DeliveryHomeScreen> {
           ),
         );
       },
+      ),
     );
   }
 
@@ -362,7 +368,7 @@ class _DeliveryHomeScreenState extends State<DeliveryHomeScreen> {
         return Semantics(
           container: true,
           label: 'Order from ${order.customerName}, $itemsSummary, '
-              '₹${order.totalAmount.toStringAsFixed(0)} cash on delivery, '
+              '${formatRupees(order.totalAmount)} cash on delivery, '
               '${isLocal ? "local order" : "nearby zone"}',
           child: Container(
             padding: const EdgeInsets.all(10),
@@ -413,7 +419,10 @@ class _DeliveryHomeScreenState extends State<DeliveryHomeScreen> {
                       ),
                       const SizedBox(height: 2),
                       Text(
-                        '${order.deliveryAddress}, ${order.village}',
+                        // Offers carry the village only (no street address).
+                        [order.deliveryAddress, order.village]
+                            .where((part) => part.trim().isNotEmpty)
+                            .join(', '),
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
                         style: TextStyle(fontSize: 11.5, color: scheme.onSurfaceVariant),
@@ -434,7 +443,7 @@ class _DeliveryHomeScreenState extends State<DeliveryHomeScreen> {
                   mainAxisSize: MainAxisSize.min,
                   children: [
                     Text(
-                      '₹${order.totalAmount.toStringAsFixed(0)}',
+                      formatRupees(order.totalAmount),
                       style: TextStyle(fontWeight: FontWeight.w900, fontSize: 15, color: scheme.primary),
                     ),
                     const SizedBox(height: 6),
@@ -448,7 +457,12 @@ class _DeliveryHomeScreenState extends State<DeliveryHomeScreen> {
                             tooltip: 'Reject offer',
                             onPressed: isAccepting
                                 ? null
-                                : () => setState(() => _dismissedOfferIds.add(order.id)),
+                                : () {
+                                setState(() => _dismissedOfferIds.add(order.id));
+                                // Best effort: if saving fails the offer just
+                                // comes back next launch.
+                                orderProvider.rejectOrderOffer(order.id);
+                              },
                             icon: Icon(Icons.close_rounded, size: 18, color: scheme.onSurfaceVariant),
                             style: IconButton.styleFrom(
                               backgroundColor: scheme.surfaceContainerHighest,
@@ -488,7 +502,7 @@ class _DeliveryHomeScreenState extends State<DeliveryHomeScreen> {
                                       setTileState(() => isAccepting = false);
                                       ScaffoldMessenger.of(context).showSnackBar(
                                         SnackBar(
-                                          content: Text('Failed to accept order: $e'),
+                                          content: Text(userMessageFor(e, fallback: "Couldn't accept the order. Please try again.")),
                                           backgroundColor: AppTokens.statusCancelled,
                                         ),
                                       );
@@ -591,7 +605,7 @@ class _DeliveryHomeScreenState extends State<DeliveryHomeScreen> {
                   const Icon(Icons.currency_rupee_rounded,
                       size: 16, color: AppTokens.statusDelivered),
                   const SizedBox(width: AppTokens.s4),
-                  Text('Collect ₹${order.totalAmount.toStringAsFixed(2)} (COD)',
+                  Text('Collect ${formatRupees(order.totalAmount)} (COD)',
                       style: const TextStyle(
                           fontWeight: FontWeight.w800,
                           color: AppTokens.statusDelivered,
@@ -654,7 +668,7 @@ class _DeliveryHomeScreenState extends State<DeliveryHomeScreen> {
             ),
             title: Text('Order #${o.id.substring(0, 6).toUpperCase()}',
                 style: const TextStyle(fontWeight: FontWeight.w700)),
-            subtitle: Text('${o.customerName} • ₹${o.totalAmount.toStringAsFixed(2)}',
+            subtitle: Text('${o.customerName} • ${formatRupees(o.totalAmount)}',
                 style: TextStyle(color: scheme.onSurfaceVariant, fontSize: 13)),
             trailing: StatusChip(status: o.status),
           ),

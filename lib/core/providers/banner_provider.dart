@@ -2,6 +2,8 @@ import 'package:flutter/foundation.dart';
 import '../../domain/entities/banner_item.dart';
 import '../../domain/repositories/banner_repository.dart';
 import '../../data/repositories/firebase_banner_repository.dart';
+import '../utils/shared_stream.dart';
+import '../utils/app_exception.dart';
 
 class BannerProvider with ChangeNotifier {
   final BannerRepository _bannerRepository;
@@ -15,12 +17,28 @@ class BannerProvider with ChangeNotifier {
   BannerProvider({BannerRepository? repository})
       : _bannerRepository = repository ?? FirebaseBannerRepository();
 
-  Stream<List<BannerItem>> streamActiveBanners() {
-    return _bannerRepository.streamActiveBanners();
+  late final SharedStream<List<BannerItem>> _activeBanners =
+      SharedStream(() => _bannerRepository.streamActiveBanners());
+  late final SharedStream<List<BannerItem>> _allBanners =
+      SharedStream(() => _bannerRepository.streamAllBanners());
+
+  /// Stable, shared streams: safe to read from build().
+  Stream<List<BannerItem>> streamActiveBanners() => _activeBanners.stream;
+
+  Stream<List<BannerItem>> streamAllBanners() => _allBanners.stream;
+
+  /// Banners are readable only when signed in, so the listeners die on
+  /// sign-out; drop them so the next login reconnects.
+  void resetSession() {
+    _activeBanners.reset();
+    _allBanners.reset();
   }
 
-  Stream<List<BannerItem>> streamAllBanners() {
-    return _bannerRepository.streamAllBanners();
+  @override
+  void dispose() {
+    _activeBanners.dispose();
+    _allBanners.dispose();
+    super.dispose();
   }
 
   Future<bool> addBanner(BannerItem b) async {
@@ -33,7 +51,7 @@ class BannerProvider with ChangeNotifier {
       notifyListeners();
       return true;
     } catch (e) {
-      _errorMessage = e.toString();
+      _errorMessage = userMessageFor(e);
       _isLoading = false;
       notifyListeners();
       return false;
@@ -50,7 +68,7 @@ class BannerProvider with ChangeNotifier {
       notifyListeners();
       return true;
     } catch (e) {
-      _errorMessage = e.toString();
+      _errorMessage = userMessageFor(e);
       _isLoading = false;
       notifyListeners();
       return false;
@@ -67,7 +85,7 @@ class BannerProvider with ChangeNotifier {
       notifyListeners();
       return true;
     } catch (e) {
-      _errorMessage = e.toString();
+      _errorMessage = userMessageFor(e);
       _isLoading = false;
       notifyListeners();
       return false;

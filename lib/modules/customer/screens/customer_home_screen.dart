@@ -3,6 +3,7 @@ import 'package:provider/provider.dart';
 import '../../../core/design/app_tokens.dart';
 import '../../../core/design/widgets/banner_carousel.dart';
 import '../../../core/design/widgets/category_icon_rail.dart';
+import '../../../core/design/widgets/email_verification_banner.dart';
 import '../../../core/design/widgets/empty_state.dart';
 import '../../../core/design/widgets/floating_navbar.dart';
 import '../../../core/design/widgets/product_card.dart';
@@ -21,6 +22,7 @@ import 'order_history_screen.dart';
 import '../../../core/providers/order_provider.dart';
 import '../../../core/utils/route_generator.dart';
 import '../../../domain/entities/order.dart';
+import '../../../core/utils/app_exception.dart';
 
 /// Used when the admin hasn't configured a custom category list yet.
 const List<String> _kDefaultCategories = [
@@ -214,7 +216,7 @@ class _CustomerHomeScreenState extends State<CustomerHomeScreen> {
             mainAxisSize: MainAxisSize.min,
             children: [
               const Text(
-                'JC Mart',
+                'J C Mart',
                 style: TextStyle(
                   fontSize: 18,
                   fontWeight: FontWeight.w900,
@@ -316,6 +318,7 @@ class _CustomerHomeScreenState extends State<CustomerHomeScreen> {
         SliverToBoxAdapter(
           child: Column(
             children: [
+              const EmailVerificationBanner(),
               StreamBuilder<AppConfig>(
                 stream: _configStream,
                 builder: (context, snapshot) {
@@ -335,7 +338,7 @@ class _CustomerHomeScreenState extends State<CustomerHomeScreen> {
                           const SizedBox(width: 10),
                           Expanded(
                             child: Text(
-                              'Store is currently closed. Orders will be scheduled for when the store re-opens.',
+                              'The store is closed. You can browse, but orders can\'t be placed until it reopens.',
                               style: TextStyle(
                                 fontSize: 12,
                                 fontWeight: FontWeight.w600,
@@ -386,21 +389,6 @@ class _CustomerHomeScreenState extends State<CustomerHomeScreen> {
         StreamBuilder<List<Product>>(
           stream: _productsStream,
           builder: (context, snapshot) {
-            if (snapshot.hasError) {
-              return SliverFillRemaining(
-                child: Center(
-                  child: Padding(
-                    padding: const EdgeInsets.all(24),
-                    child: Text(
-                      'Couldn\'t load products. Check your connection and try again.',
-                      textAlign: TextAlign.center,
-                      style: TextStyle(color: scheme.onSurfaceVariant),
-                    ),
-                  ),
-                ),
-              );
-            }
-
             if (snapshot.connectionState == ConnectionState.waiting && !snapshot.hasData) {
               return const SliverFillRemaining(
                 child: SkeletonProductGrid(),
@@ -410,7 +398,9 @@ class _CustomerHomeScreenState extends State<CustomerHomeScreen> {
             if (snapshot.hasError) {
               return SliverFillRemaining(
                 child: EmptyState.error(
-                  onAction: () => setState(() {}),
+                  title: "Couldn't load products",
+                  message: userMessageFor(snapshot.error),
+                  onAction: context.read<ProductProvider>().retryProducts,
                 ),
               );
             }
@@ -442,12 +432,7 @@ class _CustomerHomeScreenState extends State<CustomerHomeScreen> {
             return SliverPadding(
               padding: const EdgeInsets.all(16),
               sliver: SliverGrid(
-                gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-                  crossAxisCount: 2,
-                  childAspectRatio: 0.65,
-                  crossAxisSpacing: 12,
-                  mainAxisSpacing: 12,
-                ),
+                gridDelegate: productGridDelegate(context),
                 delegate: SliverChildBuilderDelegate(
                   (context, index) {
                     final product = products[index];
@@ -487,8 +472,7 @@ class _CustomerHomeScreenState extends State<CustomerHomeScreen> {
         body: storeCustomScrollView,
       ),
       const CartScreen(),
-      const OrderHistoryScreen(),
-      const OrderHistoryScreen(),
+      OrderHistoryScreen(onBrowse: () => setState(() => _currentIndex = 0)),
     ];
 
     return Scaffold(
@@ -509,29 +493,7 @@ class _CustomerHomeScreenState extends State<CustomerHomeScreen> {
             builder: (context, cart, _) {
               return FloatingNavbar(
                 currentIndex: _currentIndex,
-                onTap: (index) {
-                  if (index == 2) {
-                    // Pending / Active Order tab clicked
-                    if (activeOrders.isNotEmpty) {
-                      Navigator.pushNamed(
-                        context,
-                        RouteGenerator.orderTracking,
-                        arguments: activeOrders.first.id,
-                      );
-                    } else {
-                      setState(() => _currentIndex = 3);
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        const SnackBar(
-                          content: Text('No active pending order at the moment.'),
-                          behavior: SnackBarBehavior.floating,
-                          duration: Duration(seconds: 2),
-                        ),
-                      );
-                    }
-                  } else {
-                    setState(() => _currentIndex = index);
-                  }
-                },
+                onTap: (index) => setState(() => _currentIndex = index),
                 items: [
                   const FloatingNavItem(
                     icon: Icons.storefront_outlined,
@@ -544,16 +506,13 @@ class _CustomerHomeScreenState extends State<CustomerHomeScreen> {
                     label: 'Cart',
                     badgeCount: cart.itemCount,
                   ),
+                  // One Orders tab: orders in progress are listed first, each with
+                  // its delivery code and a Track button. The badge counts them.
                   FloatingNavItem(
-                    icon: Icons.directions_bike_outlined,
-                    activeIcon: Icons.directions_bike_rounded,
-                    label: 'Pending',
-                    badgeCount: activeOrders.length,
-                  ),
-                  const FloatingNavItem(
                     icon: Icons.receipt_long_outlined,
                     activeIcon: Icons.receipt_long_rounded,
                     label: 'Orders',
+                    badgeCount: activeOrders.length,
                   ),
                 ],
               );

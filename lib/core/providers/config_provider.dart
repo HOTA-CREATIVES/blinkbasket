@@ -5,6 +5,7 @@ import '../../domain/entities/service_zone.dart';
 import '../../domain/repositories/config_repository.dart';
 import '../../data/repositories/firebase_config_repository.dart';
 import '../utils/shared_stream.dart';
+import '../utils/app_exception.dart';
 
 class ConfigProvider with ChangeNotifier {
   final ConfigRepository _configRepository;
@@ -78,7 +79,7 @@ class ConfigProvider with ChangeNotifier {
       notifyListeners();
       return true;
     } catch (e) {
-      _errorMessage = e.toString();
+      _errorMessage = userMessageFor(e);
       _isLoading = false;
       notifyListeners();
       return false;

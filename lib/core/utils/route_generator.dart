@@ -288,7 +288,7 @@ class _SplashScreenState extends State<SplashScreen> {
                 ),
                 const SizedBox(height: 24),
                 Text(
-                  'JC Mart',
+                  'J C Mart',
                   style: Theme.of(context).textTheme.headlineSmall?.copyWith(
                         fontWeight: FontWeight.w900,
                         color: scheme.primary,

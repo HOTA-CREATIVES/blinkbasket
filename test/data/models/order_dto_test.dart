@@ -258,4 +258,32 @@ void main() {
       expect(order.totalAmount, 10.0);
     });
   });
+
+  group('OrderDto COD completion fields', () {
+    Map<String, dynamic> base() => {
+          'customerId': 'c1',
+          'status': 'delivered',
+          'totalAmount': 130,
+        };
+
+    test('parses what the rider confirmed collecting and when it was delivered', () {
+      final order = OrderDto.fromMap({
+        ...base(),
+        'paymentStatus': 'paid',
+        'codCollectedAmount': 130,
+        'deliveredAt': Timestamp.fromDate(DateTime(2026, 9, 30, 16, 5)),
+      }, 'o1');
+
+      expect(order.paymentStatus, 'paid');
+      expect(order.codCollectedAmount, 130.0);
+      expect(order.deliveredAt, DateTime(2026, 9, 30, 16, 5));
+    });
+
+    test('defaults cleanly for an order that has not been delivered', () {
+      final order = OrderDto.fromMap(base(), 'o1');
+      expect(order.paymentStatus, 'pending');
+      expect(order.codCollectedAmount, isNull);
+      expect(order.deliveredAt, isNull);
+    });
+  });
 }

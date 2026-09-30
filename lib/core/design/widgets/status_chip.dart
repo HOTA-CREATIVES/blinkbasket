@@ -39,12 +39,16 @@ class StatusChip extends StatelessWidget {
               ),
               const SizedBox(width: AppTokens.s8),
             ],
-            Text(
-              AppTokens.statusLabel(status),
-              style: Theme.of(context).textTheme.labelMedium?.copyWith(
-                    color: color,
-                    fontWeight: FontWeight.w700,
-                  ),
+            Flexible(
+              child: Text(
+                AppTokens.statusLabel(status),
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: Theme.of(context).textTheme.labelMedium?.copyWith(
+                      color: color,
+                      fontWeight: FontWeight.w700,
+                    ),
+              ),
             ),
           ],
         ),

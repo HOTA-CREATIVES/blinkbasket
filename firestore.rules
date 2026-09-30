@@ -14,8 +14,34 @@ service cloud.firestore {
       return request.auth != null;
     }
 
+    // True when the caller's admins doc exists but has been deactivated. The
+    // admin claim can outlive that by up to an hour, so it is not trusted alone
+    // (same reasoning as riderDisabled below, and as the callables' isActive
+    // checks).
+    function adminDisabled() {
+      let adminPath = /databases/$(database)/documents/admins/$(request.auth.uid);
+      return exists(adminPath) && get(adminPath).data.get('isActive', true) == false;
+    }
+
     function isAdmin() {
-      return signedIn() && request.auth.token.admin == true;
+      return signedIn() && request.auth.token.admin == true && !adminDisabled();
+    }
+
+    // A customer phone is a 10-digit Indian mobile (optionally +91-prefixed), or
+    // empty on a fresh stub. Enforced when the field is written so a rider is
+    // never handed an order with a number that can't be called.
+    function validPhone(value) {
+      return value is string && (value == '' || value.matches('^(\\+91)?[6-9][0-9]{9}$'));
+    }
+
+    // Size/shape caps on the customer-writable collections inside a user doc,
+    // so a client can't bloat it toward the 1 MiB document limit.
+    function userWithinLimits() {
+      let d = request.resource.data;
+      return (!('cart' in d) || d.cart == null || (d.cart is map && d.cart.size() <= 100))
+        && (!('addresses' in d) || (d.addresses is list && d.addresses.size() <= 20))
+        && (!('favoriteProductIds' in d) || (d.favoriteProductIds is list && d.favoriteProductIds.size() <= 500))
+        && (!('fcmTokens' in d) || (d.fcmTokens is list && d.fcmTokens.size() <= 20));
     }
 
     // True when the caller's deliveryBoys doc exists but has been disabled or
@@ -44,12 +70,19 @@ service cloud.firestore {
       allow create: if signedIn()
         && request.auth.uid == uid
         && request.resource.data.role == 'customer'
-        && request.resource.data.isActive == true;
+        && request.resource.data.isActive == true
+        && validPhone(request.resource.data.get('phone', ''))
+        && userWithinLimits();
       allow update: if isAdmin()
         || (signedIn()
             && request.auth.uid == uid
             && request.resource.data.role == resource.data.role
             && request.resource.data.isActive == resource.data.isActive
+            && userWithinLimits()
+            // Only checked when the number is being changed, so an older
+            // profile with an odd stored value can still update other fields.
+            && (!request.resource.data.diff(resource.data).affectedKeys().hasAny(['phone'])
+                || validPhone(request.resource.data.get('phone', '')))
             // Customers may edit any non-privileged field except role/isActive.
             // Server-side claims (admin/delivery) are never set on this collection.
             // totalOrders/totalSpent/firstOrderCompleted are server-write
@@ -100,12 +133,25 @@ service cloud.firestore {
             && request.resource.data.isActive == resource.data.isActive);
     }
 
+    // A rider's own declined offers. Written only by rejectOrderOffer.
+    match /deliveryBoys/{riderId}/rejectedOffers/{orderId} {
+      allow read: if signedIn() && riderId == request.auth.uid;
+      allow write: if false;
+    }
+
     // Product catalog: browsable by any user, writable by admin only.
     match /products/{productId} {
       allow read: if true;
       allow create, update: if isAdmin()
         && request.resource.data.price is number
-        && request.resource.data.price > 0.0;
+        && request.resource.data.price > 0.0
+        // Optional discount: strictly positive and below the list price, so
+        // the price the app displays is always one placeOrder will charge.
+        && (!('discountedPrice' in request.resource.data)
+            || request.resource.data.discountedPrice == null
+            || (request.resource.data.discountedPrice is number
+                && request.resource.data.discountedPrice > 0.0
+                && request.resource.data.discountedPrice < request.resource.data.price));
       allow delete: if isAdmin();
     }
 
@@ -113,19 +159,29 @@ service cloud.firestore {
       allow read: if signedIn() && (
         isAdmin()
         || resource.data.customerId == request.auth.uid
+        // Riders see an order (with the customer's phone, address and GPS pin)
+        // only once they have accepted it. Before that they see the PII-free
+        // /orderOffers/{orderId} copy below; claiming an order only ever
+        // happens through the acceptOrder Cloud Function.
         || resource.data.deliveryBoyId == request.auth.uid
-        // Blinkit-style broadcast: any rider can see a pending, unassigned
-        // order to decide whether to accept it. Claiming itself only ever
-        // happens through the acceptOrder Cloud Function (never a direct
-        // client write) — this is read-only visibility, nothing more.
-        || (isDelivery() && resource.data.status == 'pending' && (!('deliveryBoyId' in resource.data) || resource.data.deliveryBoyId == null))
       );
       // Created only via the placeOrder Cloud Function.
       allow create: if false;
       allow delete: if false;
       allow update: if
-        // Admin: assign rider, cancel, correct.
-        isAdmin()
+        // Admin: cancel an open order, or hand it back to the rider pool. Never
+        // anything else — in particular not 'delivered' (only verifyDeliveryOtp
+        // may set that, since it also consumes stock and records the COD
+        // collection) and never money/items/customer fields.
+        (isAdmin()
+            && resource.data.status in ['pending', 'assigned', 'picked_up', 'out_for_delivery']
+            && request.resource.data.diff(resource.data).affectedKeys()
+                .hasOnly(['status', 'cancelReason', 'cancelledBy', 'cancelledById',
+                          'deliveryBoyId', 'deliveryBoyName', 'deliveryBoyPhone',
+                          'unassignedFrom', 'updatedAt'])
+            && request.resource.data.status in ['cancelled', 'pending']
+            && (request.resource.data.status == 'cancelled'
+                || request.resource.data.get('deliveryBoyId', null) == null))
         // Customer: cancel their own order if it is still pending or assigned.
         || (signedIn()
             && resource.data.customerId == request.auth.uid
@@ -138,14 +194,17 @@ service cloud.firestore {
             && resource.data.customerId == request.auth.uid
             && resource.data.status == 'delivered'
             && !('rating' in resource.data)
-            && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['rating', 'ratingComment', 'ratedAt', 'updatedAt']))
-        // Rider: advance own order exactly one step forward.
-        // 'delivered' is reachable only through the verifyDeliveryOtp Cloud Function.
-        || (isDelivery()
-            && resource.data.deliveryBoyId == request.auth.uid
-            && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'updatedAt'])
-            && ((resource.data.status == 'assigned' && request.resource.data.status == 'picked_up')
-              || (resource.data.status == 'picked_up' && request.resource.data.status == 'out_for_delivery')));
+            && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['rating', 'ratingComment', 'ratedAt', 'updatedAt'])
+            && request.resource.data.rating is int
+            && request.resource.data.rating >= 1
+            && request.resource.data.rating <= 5
+            && (request.resource.data.get('ratingComment', null) == null
+                || (request.resource.data.ratingComment is string
+                    && request.resource.data.ratingComment.size() <= 500)))
+        // Riders never write an order directly. Status changes go through the
+        // advanceOrderStatus / verifyDeliveryOtp callables, which record when
+        // and where each step happened and can't be skipped by a direct write.
+        ;
 
       // Delivery OTP: the customer may re-read it; riders and admins cannot.
       match /private/{privateDoc} {
@@ -153,6 +212,15 @@ service cloud.firestore {
           && get(/databases/$(database)/documents/orders/$(orderId)).data.customerId == request.auth.uid;
         allow write: if false;
       }
+    }
+
+    // PII-free view of orders that no rider has claimed yet (first name,
+    // village, items, totals — no phone, street address or GPS pin). Written
+    // only by the onOrderWritten trigger; riders read it to decide whether to
+    // accept, and the full order becomes readable to them via acceptOrder.
+    match /orderOffers/{orderId} {
+      allow read: if isAdmin() || isDelivery();
+      allow write: if false;
     }
 
     // App configuration (delivery fee, villages, categories, store status).

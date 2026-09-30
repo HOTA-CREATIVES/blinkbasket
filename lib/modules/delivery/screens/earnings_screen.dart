@@ -6,6 +6,10 @@ import '../../../core/providers/config_provider.dart';
 import '../../../core/providers/order_provider.dart';
 import '../../../domain/entities/app_config.dart';
 import '../../../domain/entities/order.dart';
+import '../../../core/utils/app_exception.dart';
+import '../../../core/design/widgets/empty_state.dart';
+import '../../../core/utils/money.dart';
+import '../../../core/utils/date_format.dart';
 
 class EarningsScreen extends StatelessWidget {
   final bool isEmbedded;
@@ -70,15 +74,10 @@ class EarningsScreen extends StatelessWidget {
             return Center(child: CircularProgressIndicator(color: scheme.primary));
           }
           if (snapshot.hasError) {
-            return Center(
-              child: Padding(
-                padding: const EdgeInsets.all(AppTokens.s20),
-                child: Text(
-                  'Error loading earnings data:\n${snapshot.error}',
-                  textAlign: TextAlign.center,
-                  style: TextStyle(color: Theme.of(context).colorScheme.error),
-                ),
-              ),
+            return EmptyState.error(
+              title: "Couldn't load your earnings",
+              message: userMessageFor(snapshot.error),
+              onAction: () => orderProvider.retryDeliveryOrders(uid),
             );
           }
 
@@ -125,7 +124,7 @@ class EarningsScreen extends StatelessWidget {
                             ),
                             const SizedBox(height: AppTokens.s8),
                             Text(
-                              '₹${riderEarnings.toStringAsFixed(2)}',
+                              formatRupees(riderEarnings),
                               style: TextStyle(
                                 color: scheme.primary,
                                 fontWeight: FontWeight.bold,
@@ -134,7 +133,7 @@ class EarningsScreen extends StatelessWidget {
                             ),
                             const SizedBox(height: 4),
                             Text(
-                              'Current rate ₹${payoutPerDelivery.toStringAsFixed(0)} / delivery',
+                              'Current rate ${formatRupees(payoutPerDelivery)} / delivery',
                               style: TextStyle(color: scheme.onSurfaceVariant, fontSize: 11),
                             ),
                             ],
@@ -162,7 +161,7 @@ class EarningsScreen extends StatelessWidget {
                               ),
                               const SizedBox(height: AppTokens.s8),
                               Text(
-                                '₹${totalCodCollected.toStringAsFixed(2)}',
+                                formatRupees(totalCodCollected),
                                 style: TextStyle(
                                   color: scheme.primary,
                                   fontWeight: FontWeight.bold,
@@ -261,7 +260,7 @@ class EarningsScreen extends StatelessWidget {
                               style: Theme.of(context).textTheme.bodyMedium?.copyWith(fontWeight: FontWeight.bold),
                               ),
                               Text(
-                                '₹${order.totalAmount.toStringAsFixed(1)} (COD)',
+                                '${formatRupees(order.totalAmount)} (COD)',
                                 style: Theme.of(context).textTheme.bodyMedium?.copyWith(fontWeight: FontWeight.bold, color: scheme.onSurface),
                               ),
                             ],
@@ -301,10 +300,5 @@ class EarningsScreen extends StatelessWidget {
     );
   }
 
-  String _formatDateTime(DateTime dt) {
-    final hour = dt.hour % 12 == 0 ? 12 : dt.hour % 12;
-    final ampm = dt.hour >= 12 ? 'PM' : 'AM';
-    final minute = dt.minute.toString().padLeft(2, '0');
-    return '${dt.day}/${dt.month}/${dt.year} $hour:$minute $ampm';
-  }
+  String _formatDateTime(DateTime dt) => formatDateTime(dt);
 }

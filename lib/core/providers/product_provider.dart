@@ -8,6 +8,8 @@ import '../../domain/usecases/add_product_usecase.dart';
 import '../../domain/usecases/update_product_usecase.dart';
 import '../../domain/usecases/delete_product_usecase.dart';
 import '../../data/repositories/firebase_product_repository.dart';
+import '../utils/shared_stream.dart';
+import '../utils/app_exception.dart';
 
 class ProductProvider with ChangeNotifier {
   final ProductRepository _productRepository;
@@ -23,15 +25,12 @@ class ProductProvider with ChangeNotifier {
   bool get isLoading => _isLoading;
   String? get errorMessage => _errorMessage;
 
-  // A single, app-lifetime Firestore listener on the whole catalog, fanned
-  // out to every screen via a broadcast controller. Previously each
-  // StreamBuilder that called streamProducts() attached its own
-  // collection('products').snapshots() listener — re-downloading the entire
-  // catalog per screen (and per rebuild on screens that called it in build()).
-  StreamSubscription<List<Product>>? _productsSub;
-  final StreamController<List<Product>> _productsController =
-      StreamController<List<Product>>.broadcast();
-  List<Product>? _latestProducts;
+  // A single, app-lifetime Firestore listener on the whole catalog, shared by
+  // every screen. Late subscribers get the latest snapshot immediately, so they
+  // don't sit on a spinner until the next catalog change, and rebuilding a
+  // screen never opens another listener.
+  late final SharedStream<List<Product>> _products =
+      SharedStream(() => _streamProductsUseCase());
 
   ProductProvider({ProductRepository? repository})
       : _productRepository = repository ?? FirebaseProductRepository() {
@@ -41,36 +40,15 @@ class ProductProvider with ChangeNotifier {
     _deleteProductUseCase = DeleteProductUseCase(_productRepository);
   }
 
-  /// Shared catalog stream. All callers subscribe to one underlying Firestore
-  /// listener; late subscribers replay the most recent snapshot immediately so
-  /// they don't sit on a spinner until the next catalog change.
-  Stream<List<Product>> streamProducts() async* {
-    _ensureProductsSubscription();
-    if (_latestProducts != null) yield _latestProducts!;
-    yield* _productsController.stream;
-  }
+  /// The shared catalog stream — the same instance on every call.
+  Stream<List<Product>> streamProducts() => _products.stream;
 
-  void _ensureProductsSubscription() {
-    _productsSub ??= _streamProductsUseCase().listen(
-      (products) {
-        _latestProducts = products;
-        _productsController.add(products);
-      },
-      onError: (Object error, StackTrace stack) {
-        _productsController.addError(error, stack);
-        // A failed Firestore listener never recovers by itself — drop it so
-        // the next streamProducts() call (i.e. the next rebuild) reconnects.
-        _productsSub?.cancel();
-        _productsSub = null;
-        _latestProducts = null;
-      },
-    );
-  }
+  /// Retry action for the catalog error state.
+  void retryProducts() => _products.reconnect();
 
   @override
   void dispose() {
-    _productsSub?.cancel();
-    _productsController.close();
+    _products.dispose();
     super.dispose();
   }
 
@@ -88,7 +66,7 @@ class ProductProvider with ChangeNotifier {
       notifyListeners();
       return true;
     } catch (e) {
-      _errorMessage = e.toString();
+      _errorMessage = userMessageFor(e);
       _isLoading = false;
       notifyListeners();
       return false;
@@ -105,7 +83,7 @@ class ProductProvider with ChangeNotifier {
       notifyListeners();
       return true;
     } catch (e) {
-      _errorMessage = e.toString();
+      _errorMessage = userMessageFor(e);
       _isLoading = false;
       notifyListeners();
       return false;
@@ -122,7 +100,7 @@ class ProductProvider with ChangeNotifier {
       notifyListeners();
       return true;
     } catch (e) {
-      _errorMessage = e.toString();
+      _errorMessage = userMessageFor(e);
       _isLoading = false;
       notifyListeners();
       return false;
@@ -161,7 +139,7 @@ class ProductProvider with ChangeNotifier {
       notifyListeners();
       return true;
     } catch (e) {
-      _errorMessage = e.toString();
+      _errorMessage = userMessageFor(e);
       _isLoading = false;
       notifyListeners();
       return false;

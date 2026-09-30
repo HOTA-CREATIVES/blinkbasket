@@ -4,6 +4,7 @@ import '../../domain/entities/inventory_ledger.dart';
 import '../../domain/repositories/product_repository.dart';
 import '../models/product_dto.dart';
 import '../models/inventory_ledger_dto.dart';
+import '../../core/utils/app_exception.dart';
 
 class FirebaseProductRepository implements ProductRepository {
   final FirebaseFirestore _db = FirebaseFirestore.instance;
@@ -44,7 +45,7 @@ class FirebaseProductRepository implements ProductRepository {
       }
       await batch.commit();
     } catch (e) {
-      throw Exception("Failed to add product: $e");
+      throw AppException.from(e, action: 'add product');
     }
   }
 
@@ -57,7 +58,7 @@ class FirebaseProductRepository implements ProductRepository {
       // must go through [adjustStock] which writes an inventoryLogs entry.
       await _db.collection('products').doc(product.id).update(dto.toUpdateMapWithoutStock());
     } catch (e) {
-      throw Exception("Failed to update product: $e");
+      throw AppException.from(e, action: 'update product');
     }
   }
 
@@ -68,7 +69,7 @@ class FirebaseProductRepository implements ProductRepository {
       if (doc.exists) {
         final reserved = (doc.data()?['reservedStock'] as num?)?.toInt() ?? 0;
         if (reserved > 0) {
-          throw Exception(
+          throw AppException(
             "Cannot delete product with active reserved stock ($reserved units in pending orders). "
             "Please wait for orders to complete or cancel them first.",
           );
@@ -76,7 +77,7 @@ class FirebaseProductRepository implements ProductRepository {
       }
       await _db.collection('products').doc(id).delete();
     } catch (e) {
-      throw Exception("Failed to delete product: $e");
+      throw AppException.from(e, action: 'delete product');
     }
   }
 
@@ -157,7 +158,7 @@ class FirebaseProductRepository implements ProductRepository {
         });
       });
     } catch (e) {
-      throw Exception("Failed to adjust stock: $e");
+      throw AppException.from(e, action: 'adjust stock');
     }
   }
 }

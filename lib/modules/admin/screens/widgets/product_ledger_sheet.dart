@@ -5,6 +5,7 @@ import '../../../../core/providers/product_provider.dart';
 import '../../../../core/providers/auth_provider.dart';
 import '../../../../domain/entities/product.dart' as ent;
 import '../../../../domain/entities/inventory_ledger.dart';
+import '../../../../core/utils/app_exception.dart';
 
 class ProductLedgerSheet extends StatefulWidget {
   final ent.Product product;
@@ -98,7 +99,7 @@ class _ProductLedgerSheetState extends State<ProductLedgerSheet> {
         });
       }
     } catch (e) {
-      _showSnackBar('Error adjusting stock: $e');
+      _showSnackBar(userMessageFor(e, fallback: "Couldn't adjust the stock. Please try again."));
       setState(() {
         _isSubmitting = false;
       });

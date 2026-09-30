@@ -121,7 +121,7 @@ class _UnifiedLoginScreenState extends State<UnifiedLoginScreen> with SingleTick
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
-                  'Enter the email address registered with your JC Mart account. We will send you a password reset link.',
+                  'Enter the email address registered with your J C Mart account. We will send you a password reset link.',
                   style: Theme.of(ctx).textTheme.bodySmall?.copyWith(color: scheme.onSurfaceVariant),
                 ),
                 const SizedBox(height: 16),
