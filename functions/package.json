@@ -5,7 +5,6 @@
   "engines": {
     "node": "20"
   },
-
   "main": "lib/index.js",
   "scripts": {
     "build": "tsc",
@@ -14,19 +13,18 @@
     "logs": "firebase functions:log",
     "test": "jest --runInBand --forceExit"
   },
-
   "dependencies": {
     "firebase-admin": "^12.7.0",
-    "firebase-functions": "^6.1.0"
+    "firebase-functions": "^6.1.0",
+    "hypermart": "file:.."
   },
-  
   "devDependencies": {
-    "typescript": "^5.6.3",
+    "@firebase/rules-unit-testing": "^3.0.4",
+    "@types/jest": "^29.5.14",
+    "firebase": "^10.14.1",
+    "firebase-functions-test": "^3.4.0",
     "jest": "^29.7.0",
     "ts-jest": "^29.2.5",
-    "@types/jest": "^29.5.14",
-    "firebase-functions-test": "^3.4.0",
-    "@firebase/rules-unit-testing": "^3.0.4",
-    "firebase": "^10.14.1"
+    "typescript": "^5.6.3"
   }
 }
