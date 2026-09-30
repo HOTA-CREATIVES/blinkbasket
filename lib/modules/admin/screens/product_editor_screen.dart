@@ -40,6 +40,8 @@ class _ProductEditorScreenState extends State<ProductEditorScreen> {
   late final _nameController = TextEditingController(text: widget.existing?.name);
   late final _descriptionController = TextEditingController(text: widget.existing?.description);
   late final _priceController = TextEditingController(text: widget.existing?.price.toString());
+  late final _discountController = TextEditingController(
+      text: widget.existing?.discountedPrice?.toString() ?? '');
   late final _unitController = TextEditingController(text: widget.existing?.unit);
   late final _stockController = TextEditingController();
   late final _thresholdController =
@@ -47,6 +49,7 @@ class _ProductEditorScreenState extends State<ProductEditorScreen> {
 
   late String _category = widget.existing?.category ?? '';
   late bool _requiresPrescription = widget.existing?.requiresPrescription ?? false;
+  late bool _isAvailable = widget.existing?.isAvailable ?? true;
   late final Stream<List<ent.Product>> _productsStream =
       Provider.of<ProductProvider>(context, listen: false).streamProducts();
 
@@ -65,6 +68,7 @@ class _ProductEditorScreenState extends State<ProductEditorScreen> {
     _nameController.dispose();
     _descriptionController.dispose();
     _priceController.dispose();
+    _discountController.dispose();
     _unitController.dispose();
     _stockController.dispose();
     _thresholdController.dispose();
@@ -164,7 +168,8 @@ class _ProductEditorScreenState extends State<ProductEditorScreen> {
         description: _descriptionController.text.trim(),
         category: _category,
         price: double.parse(_priceController.text.trim()),
-        discountedPrice: old?.discountedPrice,
+        // Empty field = no discount (the update removes any stored one).
+        discountedPrice: double.tryParse(_discountController.text.trim()),
         imageUrl: imageUrl,
         imageUrls: _pickedImage != null ? [imageUrl, ...oldGallery] : (old?.imageUrls ?? const []),
         unit: _unitController.text.trim(),
@@ -173,7 +178,7 @@ class _ProductEditorScreenState extends State<ProductEditorScreen> {
         reservedStock: reserved,
         availableStock: available,
         lowStockThreshold: int.parse(_thresholdController.text.trim()),
-        isAvailable: old?.isAvailable ?? true,
+        isAvailable: _isAvailable,
         isFeatured: old?.isFeatured ?? false,
         tags: old?.tags ?? const [],
         requiresPrescription: _isMedicine && _requiresPrescription,
@@ -465,6 +470,43 @@ class _ProductEditorScreenState extends State<ProductEditorScreen> {
             ],
           ),
           const SizedBox(height: AppTokens.s12),
+          TextFormField(
+            controller: _discountController,
+            enabled: !_isSubmitting,
+            keyboardType: const TextInputType.numberWithOptions(decimal: true),
+            inputFormatters: [FilteringTextInputFormatter.allow(RegExp(r'[0-9.]'))],
+            onChanged: (_) => _dirty = true,
+            decoration: _decoration(
+              'Discounted price (optional)',
+              prefixText: '₹ ',
+              hint: 'Leave empty for no discount',
+            ),
+            validator: (v) {
+              final text = (v ?? '').trim();
+              if (text.isEmpty) return null;
+              final discounted = double.tryParse(text);
+              final price = double.tryParse(_priceController.text.trim());
+              if (discounted == null || discounted <= 0) return 'Enter an amount above 0';
+              if (price != null && discounted >= price) {
+                return 'Must be below the price';
+              }
+              return null;
+            },
+          ),
+          const SizedBox(height: AppTokens.s4),
+          SwitchListTile(
+            contentPadding: EdgeInsets.zero,
+            title: const Text('Available for sale'),
+            subtitle: const Text('Turn off to stop orders without deleting the product'),
+            value: _isAvailable,
+            onChanged: _isSubmitting
+                ? null
+                : (v) => setState(() {
+                      _isAvailable = v;
+                      _dirty = true;
+                    }),
+          ),
+          const SizedBox(height: AppTokens.s8),
           Wrap(
             spacing: AppTokens.s8,
             runSpacing: 0,

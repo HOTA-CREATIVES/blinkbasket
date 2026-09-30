@@ -126,7 +126,14 @@ service cloud.firestore {
       allow read: if true;
       allow create, update: if isAdmin()
         && request.resource.data.price is number
-        && request.resource.data.price > 0.0;
+        && request.resource.data.price > 0.0
+        // Optional discount: strictly positive and below the list price, so
+        // the price the app displays is always one placeOrder will charge.
+        && (!('discountedPrice' in request.resource.data)
+            || request.resource.data.discountedPrice == null
+            || (request.resource.data.discountedPrice is number
+                && request.resource.data.discountedPrice > 0.0
+                && request.resource.data.discountedPrice < request.resource.data.price));
       allow delete: if isAdmin();
     }
 

@@ -335,7 +335,7 @@ class _CustomerHomeScreenState extends State<CustomerHomeScreen> {
                           const SizedBox(width: 10),
                           Expanded(
                             child: Text(
-                              'Store is currently closed. Orders will be scheduled for when the store re-opens.',
+                              'The store is closed. You can browse, but orders can\'t be placed until it reopens.',
                               style: TextStyle(
                                 fontSize: 12,
                                 fontWeight: FontWeight.w600,

@@ -663,6 +663,17 @@ describe("firestore.rules — products", () => {
     await assertFails(setDoc(doc(asAdmin, "products/prod2"), { name: "Milk", price: -5 }));
   });
 
+  it("lets an admin set a valid discounted price and clear it, but not one at or above the list price", async () => {
+    const asAdmin = testEnv.authenticatedContext("admin1", { admin: true }).firestore();
+    await assertSucceeds(setDoc(doc(asAdmin, "products/p1"), { price: 100, discountedPrice: 80 }));
+    await assertSucceeds(setDoc(doc(asAdmin, "products/p1"), { price: 100, discountedPrice: null }));
+    await assertSucceeds(setDoc(doc(asAdmin, "products/p1"), { price: 100 }));
+    await assertFails(setDoc(doc(asAdmin, "products/p1"), { price: 100, discountedPrice: 100 }));
+    await assertFails(setDoc(doc(asAdmin, "products/p1"), { price: 100, discountedPrice: 120 }));
+    await assertFails(setDoc(doc(asAdmin, "products/p1"), { price: 100, discountedPrice: 0 }));
+    await assertFails(setDoc(doc(asAdmin, "products/p1"), { price: 100, discountedPrice: "80" }));
+  });
+
   it("lets an admin create and update a product with a positive price", async () => {
     const asAdmin = testEnv.authenticatedContext("admin1", { admin: true }).firestore();
     await assertSucceeds(setDoc(doc(asAdmin, "products/prod1"), { name: "Milk", price: 50 }));

@@ -242,7 +242,7 @@ class _CustomerSupportHubScreenState extends State<CustomerSupportHubScreen>
             _buildFaqTile(
               question: 'How does Cash on Delivery (COD) work?',
               answer:
-                  'You pay cash or scan the rider\'s UPI QR code upon delivery. You only need to share your 4-digit Delivery OTP to complete the transaction once items are checked.',
+                  'You pay the rider in cash when your order arrives. Share your 4-digit delivery OTP with the rider once you have checked the items.',
             ),
             _buildFaqTile(
               question: 'Which villages and areas are covered?',

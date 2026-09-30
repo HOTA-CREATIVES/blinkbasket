@@ -5,6 +5,7 @@ import '../../../core/design/widgets/empty_state.dart';
 import '../../../core/design/widgets/product_card.dart';
 import '../../../core/design/widgets/quantity_stepper.dart';
 import '../../../core/providers/cart_provider.dart';
+import '../../../core/utils/money.dart';
 import '../../../core/providers/config_provider.dart';
 import '../../../domain/entities/app_config.dart';
 import '../../../core/utils/route_generator.dart';
@@ -37,7 +38,12 @@ class _CartScreenState extends State<CartScreen> {
             configSnapshot.data?.deliveryFee ?? _fallbackDeliveryFee;
         final freeDeliveryAboveConfig =
             configSnapshot.data?.freeDeliveryAbove ?? _fallbackFreeDeliveryAbove;
-        return _buildScaffold(context, deliveryFeeConfig, freeDeliveryAboveConfig);
+        return _buildScaffold(
+          context,
+          deliveryFeeConfig,
+          freeDeliveryAboveConfig,
+          storeOpen: configSnapshot.data?.storeOpen ?? true,
+        );
       },
     );
   }
@@ -45,8 +51,9 @@ class _CartScreenState extends State<CartScreen> {
   Widget _buildScaffold(
     BuildContext context,
     double deliveryFeeConfig,
-    double freeDeliveryAboveConfig,
-  ) {
+    double freeDeliveryAboveConfig, {
+    required bool storeOpen,
+  }) {
     final cartProvider = Provider.of<CartProvider>(context);
     final scheme = Theme.of(context).colorScheme;
 
@@ -64,7 +71,7 @@ class _CartScreenState extends State<CartScreen> {
           ? const EmptyState(
               icon: Icons.shopping_cart_outlined,
               title: 'Your cart is empty',
-              message: 'Browse the shop and add fresh groceries or medicines.',
+              message: 'Browse the shop and add items to your cart.',
             )
           : Form(
               key: _formKey,
@@ -139,7 +146,7 @@ class _CartScreenState extends State<CartScreen> {
                                     ),
                                     const SizedBox(height: 2),
                                     Text(
-                                      '₹${item.product.price} / ${item.product.unit}',
+                                      '${formatRupees(item.product.effectivePrice)} / ${item.product.unit}',
                                       style: TextStyle(
                                           color: scheme.onSurfaceVariant,
                                           fontSize: 12),
@@ -157,10 +164,10 @@ class _CartScreenState extends State<CartScreen> {
                                               cartProvider.decrementItem(
                                                   item.product.id),
                                           canIncrement: item.quantity <
-                                              item.product.stock,
+                                              item.product.sellableStock,
                                         ),
                                         Text(
-                                          '₹${(item.product.price * item.quantity).toStringAsFixed(2)}',
+                                          formatRupees(item.product.effectivePrice * item.quantity),
                                           style: const TextStyle(
                                               fontWeight: FontWeight.w800,
                                               fontSize: 15),
@@ -292,7 +299,7 @@ class _CartScreenState extends State<CartScreen> {
                                 ),
                               ),
                               Text(
-                                'Pay cash or scan the rider\'s UPI QR on arrival.',
+                                'Pay the rider in cash when your order arrives.',
                                 style: TextStyle(
                                     fontSize: 12,
                                     color: scheme.onSurfaceVariant),
@@ -318,15 +325,17 @@ class _CartScreenState extends State<CartScreen> {
                     padding:
                         const EdgeInsets.symmetric(vertical: AppTokens.s16),
                   ),
-                  onPressed: hasRxItem
+                  onPressed: hasRxItem || !storeOpen
                       ? null
                       : () {
                           Navigator.pushNamed(context, RouteGenerator.checkout);
                         },
                   child: Text(
-                    hasRxItem
-                        ? 'Remove prescription items to proceed'
-                        : 'PROCEED TO CHECKOUT  •  ₹${grandTotal.toStringAsFixed(2)}',
+                    !storeOpen
+                        ? 'Store is closed'
+                        : hasRxItem
+                            ? 'Remove prescription items to proceed'
+                            : 'Checkout  •  ${formatRupees(grandTotal)}',
                   ),
                 ),
               ),

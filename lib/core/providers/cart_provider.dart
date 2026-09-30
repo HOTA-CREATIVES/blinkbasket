@@ -63,7 +63,7 @@ class CartProvider with ChangeNotifier {
 
   int get itemCount => _items.values.fold(0, (acc, item) => acc + item.quantity);
 
-  double get totalAmount => _items.values.fold(0.0, (acc, item) => acc + (item.product.price * item.quantity));
+  double get totalAmount => _items.values.fold(0.0, (acc, item) => acc + (item.product.effectivePrice * item.quantity));
 
   @override
   void dispose() {
@@ -115,10 +115,10 @@ class CartProvider with ChangeNotifier {
         final toRemove = <String>[];
         for (var i = 0; i < entries.length; i++) {
           final product = products[i];
-          if (product == null || product.availableStock <= 0) {
+          if (product == null || product.isOutOfStock) {
             toRemove.add(entries[i].key);
-          } else if (entries[i].value.quantity > product.availableStock) {
-            entries[i].value.quantity = product.availableStock;
+          } else if (entries[i].value.quantity > product.sellableStock) {
+            entries[i].value.quantity = product.sellableStock;
           }
         }
         if (toRemove.isNotEmpty) {
@@ -163,7 +163,7 @@ class CartProvider with ChangeNotifier {
   /// Returns `true` if the item was added, `false` if stock is insufficient.
   bool addItem(Product product) {
     final currentQty = _items[product.id]?.quantity ?? 0;
-    if (currentQty + 1 > product.availableStock) {
+    if (currentQty + 1 > product.sellableStock) {
       return false; // Stock exceeded — caller should show a message
     }
     if (_items.containsKey(product.id)) {
@@ -180,7 +180,7 @@ class CartProvider with ChangeNotifier {
   bool addItemQuantity(Product product, int quantity) {
     if (quantity <= 0) return false;
     final currentQty = _items[product.id]?.quantity ?? 0;
-    if (currentQty + quantity > product.availableStock) {
+    if (currentQty + quantity > product.sellableStock) {
       return false; // Stock exceeded — caller should show a message
     }
     if (_items.containsKey(product.id)) {

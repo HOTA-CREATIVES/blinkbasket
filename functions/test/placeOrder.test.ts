@@ -180,6 +180,48 @@ describe("placeOrder", () => {
     expect(productSnap.data()?.reservedStock).toBe(0);
   });
 
+  it("rejects a product the admin switched off with isAvailable=false (what the app's flag writes)", async () => {
+    await seedUser("cust1");
+    await seedProduct("prod1", { isAvailable: false });
+    await seedConfig();
+
+    await expect(placeOrder.run(order("cust1"))).rejects.toThrow(/not currently available/);
+    const productSnap = await db.collection("products").doc("prod1").get();
+    expect(productSnap.data()?.reservedStock).toBe(0);
+  });
+
+  describe("discounted pricing", () => {
+    it("charges the discounted price the app displays and records the list price", async () => {
+      await seedUser("cust1");
+      await seedProduct("prod1", { price: 100, discountedPrice: 80, availableStock: 10 });
+      await seedConfig({ freeDeliveryAbove: 1000 });
+
+      const result = await placeOrder.run(
+        order("cust1", { items: [{ productId: "prod1", quantity: 2 }] })
+      );
+
+      expect(result.subtotal).toBe(160);
+      const orderSnap = await db.collection("orders").doc(result.orderId).get();
+      expect(orderSnap.data()?.items[0].price).toBe(80);
+      expect(orderSnap.data()?.items[0].listPrice).toBe(100);
+    });
+
+    it.each([
+      ["equal to the list price", 100],
+      ["above the list price", 150],
+      ["zero", 0],
+      ["negative", -5],
+      ["not a number", "80"],
+    ])("ignores a discount that is %s and charges the list price", async (_label, discountedPrice) => {
+      await seedUser("cust1");
+      await seedProduct("prod1", { price: 100, discountedPrice, availableStock: 10 });
+      await seedConfig({ freeDeliveryAbove: 1000 });
+
+      const result = await placeOrder.run(order("cust1"));
+      expect(result.subtotal).toBe(100);
+    });
+  });
+
   it("rejects an inactive (deactivated) product", async () => {
     await seedUser("cust1");
     await seedProduct("prod1", { isActive: false });
@@ -307,6 +349,50 @@ describe("placeOrder", () => {
     it("accepts delivery coordinates within the service radius", async () => {
       const result = await placeOrder.run(order("cust1", { latitude: 16.55, longitude: 81.52 }));
       expect(result.orderId).toBeTruthy();
+    });
+
+    describe("admin-configured service zones", () => {
+      // 25 km from Bhimavaram, i.e. outside the built-in 12 km village radius.
+      const FAR = { latitude: 16.77, longitude: 81.52 };
+      const zone = (over: Record<string, unknown> = {}) => ({
+        name: "Palakollu",
+        lat: 16.77,
+        lng: 81.53,
+        radiusKm: 5,
+        ...over,
+      });
+
+      it("accepts a pin inside an admin-added zone the built-in list doesn't cover", async () => {
+        await seedConfig({ serviceZones: [zone()] });
+        const result = await placeOrder.run(order("cust1", FAR));
+        const orderSnap = await db.collection("orders").doc(result.orderId).get();
+        expect(orderSnap.data()?.village).toBe("Palakollu");
+      });
+
+      it("uses the zone's own radius, rejecting a pin just outside it", async () => {
+        await seedConfig({ serviceZones: [zone({ radiusKm: 0.2 })] });
+        await expect(placeOrder.run(order("cust1", FAR))).rejects.toThrow(/outside our service area/);
+      });
+
+      it("stops serving a village the admin removed from the zone list", async () => {
+        await seedConfig({ serviceZones: [zone()] });
+        await expect(
+          placeOrder.run(order("cust1", { latitude: 16.55, longitude: 81.52 }))
+        ).rejects.toThrow(/outside our service area/);
+      });
+
+      it("falls back to the built-in villages when the configured zones are unusable", async () => {
+        await seedConfig({ serviceZones: [{ name: "", lat: "x", lng: null, radiusKm: -1 }] });
+        const result = await placeOrder.run(order("cust1", { latitude: 16.55, longitude: 81.52 }));
+        expect(result.orderId).toBeTruthy();
+      });
+
+      it("still rejects a pin that is exactly a configured zone centre", async () => {
+        await seedConfig({ serviceZones: [zone()] });
+        await expect(
+          placeOrder.run(order("cust1", { latitude: 16.77, longitude: 81.53 }))
+        ).rejects.toThrow(/pin your exact/);
+      });
     });
 
     it("derives the order's village from the pin, not the profile village", async () => {

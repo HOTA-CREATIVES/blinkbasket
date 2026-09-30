@@ -25,16 +25,12 @@ class ProductCard extends StatelessWidget {
     this.onTap,
   });
 
-  bool get _outOfStock => product.availableStock <= 0 || !product.isAvailable;
-  bool get _lowStock => !_outOfStock && product.availableStock <= 5;
+  bool get _outOfStock => product.isOutOfStock;
+  bool get _lowStock => !_outOfStock && product.sellableStock <= 5;
 
   /// Whole-number discount percentage vs. [Product.discountedPrice], or
   /// null when there's no active discount.
-  int? get _discountPercent {
-    final discounted = product.discountedPrice;
-    if (discounted == null || discounted >= product.price || product.price <= 0) return null;
-    return (((product.price - discounted) / product.price) * 100).round();
-  }
+  int? get _discountPercent => product.hasDiscount ? product.discountPercent : null;
 
   @override
   Widget build(BuildContext context) {
@@ -42,8 +38,8 @@ class ProductCard extends StatelessWidget {
     final textTheme = Theme.of(context).textTheme;
     final discountPercent = _discountPercent;
 
-    final effectivePrice = product.discountedPrice ?? product.price;
-    final stockInfo = _outOfStock ? 'Out of stock' : (_lowStock ? 'Only ${product.stock} left' : '');
+    final effectivePrice = product.effectivePrice;
+    final stockInfo = _outOfStock ? 'Out of stock' : (_lowStock ? 'Only ${product.sellableStock} left' : '');
     final rxInfo = product.requiresPrescription ? 'Requires prescription' : '';
     final semanticSummary = '${product.name}, ${product.unit}, Rupees ${_formatPrice(effectivePrice)}. $stockInfo $rxInfo'.trim();
 
@@ -94,7 +90,7 @@ class ProductCard extends StatelessWidget {
                             borderRadius: BorderRadius.circular(AppTokens.rPill),
                           ),
                           child: Text(
-                            'Only ${product.availableStock} left',
+                            'Only ${product.sellableStock} left',
                             style: textTheme.labelSmall?.copyWith(color: Colors.white, fontSize: 10),
                           ),
                         ),
@@ -168,7 +164,7 @@ class ProductCard extends StatelessWidget {
                       children: [
                         Flexible(
                           child: Text(
-                            '₹${_formatPrice(product.discountedPrice ?? product.price)}',
+                            '₹${_formatPrice(product.effectivePrice)}',
                             maxLines: 1,
                             overflow: TextOverflow.ellipsis,
                             style: textTheme.titleSmall?.copyWith(color: scheme.primary, fontWeight: FontWeight.w800),
@@ -180,7 +176,7 @@ class ProductCard extends StatelessWidget {
                                 quantity: quantityInCart,
                                 onIncrement: onAdd,
                                 onDecrement: onRemove,
-                                canIncrement: quantityInCart < product.availableStock,
+                                canIncrement: quantityInCart < product.sellableStock,
                                 productName: product.name,
                               )
                             : _AddButton(enabled: !_outOfStock, onAdd: onAdd, productName: product.name),

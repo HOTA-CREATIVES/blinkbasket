@@ -12,6 +12,7 @@ import '../../../core/providers/cart_provider.dart';
 import '../../../core/providers/config_provider.dart';
 import '../../../core/providers/order_provider.dart';
 import '../../../core/utils/customer_helper.dart';
+import '../../../core/utils/money.dart';
 import '../../../core/utils/route_generator.dart';
 import '../../../domain/entities/app_config.dart';
 import '../../../domain/entities/order.dart';
@@ -155,7 +156,7 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
         .map((c) => OrderItem(
               productId: c.product.id,
               name: c.product.name,
-              price: c.product.price,
+              price: c.product.effectivePrice,
               quantity: c.quantity,
             ))
         .toList();
@@ -253,65 +254,6 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
               child: ListView(
                 padding: const EdgeInsets.all(AppTokens.s16),
                 children: [
-                  // ⚡ 20-Min Flash Delivery Banner
-                  Container(
-                    margin: const EdgeInsets.only(bottom: AppTokens.s16),
-                    padding: const EdgeInsets.symmetric(
-                        horizontal: AppTokens.s16, vertical: 14.0),
-                    decoration: BoxDecoration(
-                      gradient: const LinearGradient(
-                        colors: [Color(0xFF059669), Color(0xFF10B981)],
-                        begin: Alignment.topLeft,
-                        end: Alignment.bottomRight,
-                      ),
-                      borderRadius: BorderRadius.circular(AppTokens.rLg),
-                      boxShadow: [
-                        BoxShadow(
-                          color: const Color(0xFF059669).withValues(alpha: 0.25),
-                          blurRadius: 10,
-                          offset: const Offset(0, 4),
-                        ),
-                      ],
-                    ),
-                    child: Row(
-                      children: [
-                        Container(
-                          padding: const EdgeInsets.all(AppTokens.s8),
-                          decoration: BoxDecoration(
-                            color: Colors.white.withValues(alpha: 0.2),
-                            shape: BoxShape.circle,
-                          ),
-                          child: const Icon(Icons.bolt_rounded, color: Colors.white, size: 24),
-                        ),
-                        const SizedBox(width: AppTokens.s12),
-                        Expanded(
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              const Text(
-                                'Flash Delivery Guaranteed',
-                                style: TextStyle(
-                                  color: Colors.white,
-                                  fontWeight: FontWeight.w800,
-                                  fontSize: 15,
-                                ),
-                              ),
-                              const SizedBox(height: 2),
-                              Text(
-                                'Estimated Delivery Time: 15 - 20 Mins',
-                                style: TextStyle(
-                                  color: Colors.white.withValues(alpha: 0.9),
-                                  fontSize: 12.5,
-                                  fontWeight: FontWeight.w500,
-                                ),
-                              ),
-                            ],
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-
                   // 1. Delivery Contact & Address Card
                   Card(
                     child: Padding(
@@ -524,7 +466,7 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
                                               fontWeight: FontWeight.w600, fontSize: 13.5),
                                         ),
                                         Text(
-                                          'Qty: ${item.quantity}  •  ₹${item.product.price}/${item.product.unit}',
+                                          'Qty: ${item.quantity}  •  ${formatRupees(item.product.effectivePrice)}/${item.product.unit}',
                                           style: TextStyle(
                                               color: scheme.onSurfaceVariant, fontSize: 12),
                                         ),
@@ -532,7 +474,7 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
                                     ),
                                   ),
                                   Text(
-                                    '₹${(item.product.price * item.quantity).toStringAsFixed(2)}',
+                                    formatRupees(item.product.effectivePrice * item.quantity),
                                     style: const TextStyle(
                                         fontWeight: FontWeight.w700, fontSize: 13.5),
                                   ),

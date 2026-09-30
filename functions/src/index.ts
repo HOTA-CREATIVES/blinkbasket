@@ -125,13 +125,82 @@ function haversineMeters(lat1: number, lon1: number, lat2: number, lon2: number)
   return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
 }
 
-function nearestVillage(lat: number, lng: number): { name: string; distance: number } {
-  let best = { name: "", distance: Infinity };
-  for (const v of VILLAGES) {
-    const d = haversineMeters(lat, lng, v.latitude, v.longitude);
-    if (d < best.distance) best = { name: v.name, distance: d };
+interface DeliveryZone {
+  name: string;
+  latitude: number;
+  longitude: number;
+  radiusMeters: number;
+}
+
+/**
+ * The delivery zones in force: the admin-configured `/config/app.serviceZones`
+ * (each with its own radius) when present and valid, else the built-in
+ * VILLAGES list. The client checks the same zones, so a zone the admin adds is
+ * orderable instead of passing the app and failing here.
+ */
+function deliveryZonesFromConfig(config: FirebaseFirestore.DocumentData): DeliveryZone[] {
+  const raw = config?.serviceZones;
+  const zones: DeliveryZone[] = Array.isArray(raw)
+    ? raw
+        .map((z: any) => ({
+          name: String(z?.name ?? "").trim(),
+          latitude: Number(z?.lat),
+          longitude: Number(z?.lng),
+          radiusMeters: Number(z?.radiusKm) * 1000,
+        }))
+        .filter(
+          (z) =>
+            z.name.length > 0 &&
+            isValidCoordinate(z.latitude, z.longitude) &&
+            Number.isFinite(z.radiusMeters) &&
+            z.radiusMeters > 0
+        )
+    : [];
+  if (zones.length > 0) return zones;
+  return VILLAGES.map((v) => ({
+    name: v.name,
+    latitude: v.latitude,
+    longitude: v.longitude,
+    radiusMeters: SERVICE_RADIUS_METERS,
+  }));
+}
+
+/** Which zone (if any) contains the point, plus how close the point is to the
+ * nearest zone centre (used to reject an un-pinned "centroid" placeholder). */
+function resolveDeliveryZone(
+  lat: number,
+  lng: number,
+  zones: DeliveryZone[]
+): { zone: DeliveryZone | null; zoneDistance: number; nearestCentreDistance: number } {
+  let zone: DeliveryZone | null = null;
+  let zoneDistance = Infinity;
+  let nearestCentreDistance = Infinity;
+  for (const z of zones) {
+    const d = haversineMeters(lat, lng, z.latitude, z.longitude);
+    nearestCentreDistance = Math.min(nearestCentreDistance, d);
+    if (d <= z.radiusMeters && d < zoneDistance) {
+      zone = z;
+      zoneDistance = d;
+    }
   }
-  return best;
+  return { zone, zoneDistance, nearestCentreDistance };
+}
+
+/** What the customer pays per unit: a valid discount (0 < discounted < price)
+ * when the admin has set one, else the list price. The app shows the same
+ * figure (Product.effectivePrice), so the displayed and charged price agree. */
+function effectivePrice(product: FirebaseFirestore.DocumentData): number {
+  const price = Number(product.price ?? 0);
+  const discounted = product.discountedPrice;
+  if (typeof discounted === "number" && Number.isFinite(discounted) && discounted > 0 && discounted < price) {
+    return discounted;
+  }
+  return price;
+}
+
+/** A product the admin has switched off (either flag) can't be ordered. */
+function isProductSellable(product: FirebaseFirestore.DocumentData): boolean {
+  return product.isActive !== false && product.isAvailable !== false;
 }
 
 // A real house pin never lands within a few metres of a village centroid, but
@@ -410,19 +479,22 @@ export const placeOrder = onCall({ region: REGION, enforceAppCheck: process.env.
       "A delivery location (GPS coordinates) is required to place an order."
     );
   }
-  const nearest = nearestVillage(latitude, longitude);
-  if (nearest.distance > SERVICE_RADIUS_METERS) {
+  const configSnap = await db.collection("config").doc("app").get();
+  const config = configSnap.exists ? (configSnap.data() as FirebaseFirestore.DocumentData) : {};
+  const resolved = resolveDeliveryZone(latitude, longitude, deliveryZonesFromConfig(config));
+  if (!resolved.zone) {
     throw new HttpsError(
       "failed-precondition",
       "This delivery address is outside our service area."
     );
   }
-  if (nearest.distance < CENTROID_PLACEHOLDER_METERS) {
+  if (resolved.nearestCentreDistance < CENTROID_PLACEHOLDER_METERS) {
     throw new HttpsError(
       "invalid-argument",
       "Please pin your exact delivery location on the map."
     );
   }
+  const nearest = { name: resolved.zone.name };
   const seen = new Set<string>();
   for (const item of items) {
     if (
@@ -449,8 +521,6 @@ export const placeOrder = onCall({ region: REGION, enforceAppCheck: process.env.
     throw new HttpsError("permission-denied", "Your account is deactivated. Contact support.");
   }
 
-  const configSnap = await db.collection("config").doc("app").get();
-  const config = configSnap.exists ? (configSnap.data() as FirebaseFirestore.DocumentData) : {};
   if (config.storeOpen === false) {
     throw new HttpsError("failed-precondition", "The store is currently closed. Please try later.");
   }
@@ -511,7 +581,7 @@ export const placeOrder = onCall({ region: REGION, enforceAppCheck: process.env.
           `"${product.name}" is a prescription medicine and can't be ordered in the app yet.`
         );
       }
-      if (product.isActive === false) {
+      if (!isProductSellable(product)) {
         throw new HttpsError(
           "failed-precondition",
           `"${product.name}" is not currently available for purchase.`
@@ -530,7 +600,8 @@ export const placeOrder = onCall({ region: REGION, enforceAppCheck: process.env.
           `"${product.name}" has only ${availableStock} units available for purchase.`
         );
       }
-      const price = Number(product.price ?? 0);
+      const listPrice = Number(product.price ?? 0);
+      const price = effectivePrice(product);
       if (!Number.isFinite(price) || price <= 0) {
         throw new HttpsError(
           "failed-precondition",
@@ -566,6 +637,8 @@ export const placeOrder = onCall({ region: REGION, enforceAppCheck: process.env.
         productId: snap.id,
         name: String(product.name ?? ""),
         price,
+        // The undiscounted price, for receipts. `price` is what was charged.
+        listPrice,
         quantity: item.quantity,
       };
     });
@@ -1338,8 +1411,8 @@ export const onProductWritten = onDocumentWritten({ region: REGION, document: "p
 
   const statsRef = db.collection("config").doc("dashboard_stats");
 
-  const beforeExists = !!beforeData && beforeData.isActive !== false;
-  const afterExists = !!afterData && afterData.isActive !== false;
+  const beforeExists = !!beforeData && isProductSellable(beforeData);
+  const afterExists = !!afterData && isProductSellable(afterData);
 
   let delta = 0;
   if (!beforeExists && afterExists) {
