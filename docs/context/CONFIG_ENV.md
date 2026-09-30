@@ -30,6 +30,7 @@ Results are cached in `/geocodeCache` (30 days); set a Firestore TTL policy if y
 | Field | Default | Effect |
 |---|---|---|
 | `requireVerifiedEmail` | `true` | `placeOrder` refuses email/password accounts whose email is unverified. Set `false` only while email delivery is broken. |
+| `maxActiveOrdersPerRider` | `3` (1–20) | How many orders (assigned / picked up / out for delivery) one rider may hold; `acceptOrder` refuses more. |
 | `serviceZones` | built-in villages, 12 km | Delivery zones (`name`, `lat`, `lng`, `radiusKm`) used by the app and by `placeOrder` / `searchAddress`. |
 
 ### Secrets

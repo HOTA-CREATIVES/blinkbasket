@@ -1,7 +1,9 @@
 import 'dart:async';
 import 'package:cloud_firestore/cloud_firestore.dart' hide Order;
 import 'package:cloud_functions/cloud_functions.dart';
+import '../../domain/entities/delivery_otp.dart';
 import '../../domain/entities/order.dart';
+import '../../domain/entities/rider_location.dart';
 import '../../domain/repositories/order_repository.dart';
 import '../../core/models/user_model.dart';
 import '../models/order_dto.dart';
@@ -150,13 +152,15 @@ class FirebaseOrderRepository implements OrderRepository {
   }
 
   @override
-  Future<String?> verifyDeliveryOtp(String orderId, String otp, double collectedAmount) async {
+  Future<String?> verifyDeliveryOtp(String orderId, String otp, double collectedAmount,
+      {RiderLocation? location}) async {
     try {
       final callable = _functions.httpsCallable('verifyDeliveryOtp');
       await callable.call<dynamic>({
         'orderId': orderId,
         'otp': otp,
         'collectedAmount': collectedAmount,
+        if (location != null) 'location': location.toMap(),
       });
       return null;
     } on FirebaseFunctionsException catch (e) {
@@ -182,14 +186,69 @@ class FirebaseOrderRepository implements OrderRepository {
   }
 
   @override
-  Future<void> updateOrderStatus(String orderId, String status) async {
+  Future<String?> advanceOrderStatus(String orderId, String nextStatus,
+      {RiderLocation? location}) async {
     try {
-      await _db.collection('orders').doc(orderId).update({
-        'status': status,
-        'updatedAt': FieldValue.serverTimestamp(),
-      });
+      await _functions
+          .httpsCallable('advanceOrderStatus')
+          .call<dynamic>({
+            'orderId': orderId,
+            'status': nextStatus,
+            if (location != null) 'location': location.toMap(),
+          })
+          .timeout(const Duration(seconds: 20));
+      return null;
+    } on TimeoutException {
+      return 'Request timed out. Check your connection and try again.';
+    } on FirebaseFunctionsException catch (e) {
+      return userMessageFor(e,
+          fallback: "Couldn't update this order. Go back and check its latest status.");
+    } catch (_) {
+      return "Couldn't update this order. Check your connection and try again.";
+    }
+  }
+
+  @override
+  Future<DeliveryOtp?> getDeliveryOtp(String orderId) async {
+    try {
+      final doc = await _db
+          .collection('orders')
+          .doc(orderId)
+          .collection('private')
+          .doc('delivery')
+          .get();
+      final data = doc.data();
+      final code = data?['otp'];
+      if (code is! String || code.isEmpty) return null;
+      return DeliveryOtp(
+        code: code,
+        expiresAt: (data?['expiresAt'] as Timestamp?)?.toDate(),
+      );
+    } catch (_) {
+      return null;
+    }
+  }
+
+  @override
+  Future<DeliveryOtp> regenerateDeliveryOtp(String orderId) async {
+    try {
+      final result = await _functions
+          .httpsCallable('regenerateDeliveryOtp')
+          .call<dynamic>({'orderId': orderId})
+          .timeout(const Duration(seconds: 20));
+      final data = Map<String, dynamic>.from(result.data as Map);
+      final expiresAtMs = data['expiresAtMs'];
+      return DeliveryOtp(
+        code: data['otp'] as String,
+        expiresAt: expiresAtMs is num
+            ? DateTime.fromMillisecondsSinceEpoch(expiresAtMs.toInt())
+            : null,
+      );
     } catch (e) {
-      throw AppException.from(e, action: 'update order status');
+      throw AppException(
+        userMessageFor(e, fallback: "Couldn't get a new code. Please try again."),
+        code: e is FirebaseFunctionsException ? e.code : null,
+      );
     }
   }
 

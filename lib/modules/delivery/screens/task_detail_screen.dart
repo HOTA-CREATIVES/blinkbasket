@@ -6,6 +6,8 @@ import '../../../core/design/widgets/status_chip.dart';
 import '../../../core/design/widgets/swipe_to_confirm_slider.dart';
 import '../../../core/providers/config_provider.dart';
 import '../../../core/providers/order_provider.dart';
+import '../../../core/services/location_service.dart';
+import '../../../core/utils/contact_launcher.dart';
 import '../../../domain/entities/app_config.dart';
 import '../../../domain/entities/order.dart';
 import '../widgets/otp_verification_grid.dart';
@@ -29,16 +31,19 @@ class TaskDetailScreen extends StatefulWidget {
 }
 
 class _TaskDetailScreenLiveState extends State<TaskDetailScreen> {
-  late final Stream<Order> _orderStream =
-      Provider.of<OrderProvider>(context, listen: false).streamOrder(widget.order.id);
+  late final Stream<Order> _orderStream = Provider.of<OrderProvider>(
+    context,
+    listen: false,
+  ).streamOrder(widget.order.id);
 
   @override
   Widget build(BuildContext context) {
     return StreamBuilder<Order>(
       stream: _orderStream,
       initialData: widget.order,
-      builder: (context, snapshot) =>
-          _TaskDetailBody(order: snapshot.data ?? widget.order),
+      builder:
+          (context, snapshot) =>
+              _TaskDetailBody(order: snapshot.data ?? widget.order),
     );
   }
 }
@@ -82,15 +87,27 @@ class _TaskDetailScreenState extends State<_TaskDetailBody> {
     }
   }
 
-  Future<void> _callCustomer(String phone) async {
-    final clean = phone.replaceAll(RegExp(r'\s+|-'), '');
-    final uri = Uri(scheme: 'tel', path: clean);
-    if (await canLaunchUrl(uri)) {
-      await launchUrl(uri);
-    } else if (mounted) {
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text('Could not place call to $phone')));
+  /// Calls or WhatsApps the customer, and says when that isn't possible.
+  Future<void> _contactCustomer({required bool whatsApp}) async {
+    final messenger = ScaffoldMessenger.of(context);
+    final order = widget.order;
+    final launcher = ContactLauncher();
+    final shortId = order.id.substring(0, 6).toUpperCase();
+    final result =
+        whatsApp
+            ? await launcher.whatsApp(
+              order.customerPhone,
+              message:
+                  "Hi ${order.customerName}, I'm your J C Mart delivery partner "
+                  'for order #$shortId.',
+            )
+            : await launcher.call(order.customerPhone);
+    final problem = ContactLauncher.messageFor(
+      result,
+      what: whatsApp ? 'WhatsApp' : 'the phone app',
+    );
+    if (problem != null) {
+      messenger.showSnackBar(SnackBar(content: Text(problem)));
     }
   }
 
@@ -160,14 +177,20 @@ class _TaskDetailScreenState extends State<_TaskDetailBody> {
                     },
                     child: Column(
                       mainAxisSize: MainAxisSize.min,
-                      children: _kDeliveryFailureReasons.map(
-                        (reason) => RadioListTile<String>(
-                          value: reason,
-                          contentPadding: EdgeInsets.zero,
-                          dense: true,
-                          title: Text(reason, style: const TextStyle(fontSize: 14)),
-                        ),
-                      ).toList(),
+                      children:
+                          _kDeliveryFailureReasons
+                              .map(
+                                (reason) => RadioListTile<String>(
+                                  value: reason,
+                                  contentPadding: EdgeInsets.zero,
+                                  dense: true,
+                                  title: Text(
+                                    reason,
+                                    style: const TextStyle(fontSize: 14),
+                                  ),
+                                ),
+                              )
+                              .toList(),
                     ),
                   ),
                 ],
@@ -285,71 +308,71 @@ class _TaskDetailScreenState extends State<_TaskDetailBody> {
     String nextStatus,
     Color nextColor,
   ) async {
-          final messenger = ScaffoldMessenger.of(context);
-          final navigator = Navigator.of(context);
+    final messenger = ScaffoldMessenger.of(context);
+    final navigator = Navigator.of(context);
 
-          if (nextStatus == 'delivered') {
-            if (!mounted) return;
-            _showOtpVerification(orderProvider);
-          } else {
-            // The item checklist is a pickup step (the rider
-            // is in the store) — gate it here, not at the
-            // customer's door.
-            if (nextStatus == 'picked_up' &&
-                _checkedItems.values.any((checked) => !checked)) {
-              final proceed = await showDialog<bool>(
-                context: context,
-                builder:
-                    (dialogCtx) => AlertDialog(
-                      title: const Text('Unchecked Items'),
-                      content: const Text(
-                        'Some items in the checklist are not checked off yet. Have you collected all items?',
-                      ),
-                      actions: [
-                        TextButton(
-                          onPressed:
-                              () => Navigator.pop(dialogCtx, false),
-                          child: const Text('Review Checklist'),
-                        ),
-                        ElevatedButton(
-                          onPressed:
-                              () => Navigator.pop(dialogCtx, true),
-                          child: const Text('Pick Up Anyway'),
-                        ),
-                      ],
-                    ),
-              );
-              if (proceed != true || !mounted) return;
-            }
-            final err = await orderProvider.updateStatus(
-              widget.order.id,
-              nextStatus,
-            );
-            if (!mounted) return;
-            if (err != null) {
-              messenger.showSnackBar(
-                SnackBar(
-                  content: Text('Failed to update status: $err'),
-                  backgroundColor: Colors.red,
-                  behavior: SnackBarBehavior.floating,
+    if (nextStatus == 'delivered') {
+      if (!mounted) return;
+      _showOtpVerification(orderProvider);
+    } else {
+      // The item checklist is a pickup step (the rider
+      // is in the store) — gate it here, not at the
+      // customer's door.
+      if (nextStatus == 'picked_up' &&
+          _checkedItems.values.any((checked) => !checked)) {
+        final proceed = await showDialog<bool>(
+          context: context,
+          builder:
+              (dialogCtx) => AlertDialog(
+                title: const Text('Unchecked Items'),
+                content: const Text(
+                  'Some items in the checklist are not checked off yet. Have you collected all items?',
                 ),
-              );
-              return;
-            }
-            navigator.pop(); // Return to list view
-            messenger.showSnackBar(
-              SnackBar(
-                content: Text(
-                  'Status updated to: ${nextStatus.replaceAll("_", " ").toUpperCase()}',
-                  style: const TextStyle(
-                    fontWeight: FontWeight.bold,
+                actions: [
+                  TextButton(
+                    onPressed: () => Navigator.pop(dialogCtx, false),
+                    child: const Text('Review Checklist'),
                   ),
-                ),
-                backgroundColor: nextColor,
-                behavior: SnackBarBehavior.floating,
+                  ElevatedButton(
+                    onPressed: () => Navigator.pop(dialogCtx, true),
+                    child: const Text('Pick Up Anyway'),
+                  ),
+                ],
               ),
-            );
-          }
+        );
+        if (proceed != true || !mounted) return;
+      }
+      // Where the rider is when they take this step, recorded as proof.
+      // Best effort and time-boxed: no fix never blocks the update.
+      final location = await LocationService.quickFix();
+      final err = await orderProvider.advanceStatus(
+        widget.order.id,
+        nextStatus,
+        location: location,
+      );
+      if (!mounted) return;
+      if (err != null) {
+        messenger.showSnackBar(
+          SnackBar(
+            content: Text(err),
+            backgroundColor: Colors.red,
+            behavior: SnackBarBehavior.floating,
+          ),
+        );
+        return;
+      }
+      navigator.pop(); // Return to list view
+      messenger.showSnackBar(
+        SnackBar(
+          content: Text(
+            'Status updated to: ${nextStatus.replaceAll("_", " ").toUpperCase()}',
+            style: const TextStyle(fontWeight: FontWeight.bold),
+          ),
+          backgroundColor: nextColor,
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+    }
   }
 
   @override
@@ -472,49 +495,46 @@ class _TaskDetailScreenState extends State<_TaskDetailBody> {
                         ),
                       ],
                     ),
-                    const SizedBox(height: AppTokens.s16),                    Row(
-                      children: [
-                        if (widget.order.latitude != null &&
-                            widget.order.longitude != null) ...[
-                          Expanded(
-                            child: ElevatedButton.icon(
-                              icon: const Icon(
-                                Icons.navigation_rounded,
-                                size: 18,
-                              ),
-                              label: const Text(
-                                'NAVIGATE',
-                                style: TextStyle(fontWeight: FontWeight.bold),
-                              ),
-                              style: ElevatedButton.styleFrom(
-                                backgroundColor: scheme.primary.withValues(
-                                  alpha: 0.1,
-                                ),
-                                foregroundColor: scheme.primary,
-                                elevation: 0,
-                                shape: RoundedRectangleBorder(
-                                  borderRadius: BorderRadius.circular(
-                                    AppTokens.rSm,
-                                  ),
-                                ),
-                                padding: const EdgeInsets.symmetric(
-                                  vertical: 12,
-                                ),
-                              ),
-                              onPressed:
-                                  () => _launchMap(
-                                    widget.order.latitude!,
-                                    widget.order.longitude!,
-                                  ),
-                            ),
+                    const SizedBox(height: AppTokens.s16),
+                    if (widget.order.latitude != null &&
+                        widget.order.longitude != null) ...[
+                      SizedBox(
+                        width: double.infinity,
+                        child: ElevatedButton.icon(
+                          icon: const Icon(Icons.navigation_rounded, size: 18),
+                          label: const Text(
+                            'Navigate',
+                            style: TextStyle(fontWeight: FontWeight.bold),
                           ),
-                          const SizedBox(width: 12),
-                        ],
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: scheme.primary.withValues(
+                              alpha: 0.1,
+                            ),
+                            foregroundColor: scheme.primary,
+                            elevation: 0,
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(
+                                AppTokens.rSm,
+                              ),
+                            ),
+                            padding: const EdgeInsets.symmetric(vertical: 12),
+                          ),
+                          onPressed:
+                              () => _launchMap(
+                                widget.order.latitude!,
+                                widget.order.longitude!,
+                              ),
+                        ),
+                      ),
+                      const SizedBox(height: AppTokens.s8),
+                    ],
+                    Row(
+                      children: [
                         Expanded(
                           child: ElevatedButton.icon(
                             icon: const Icon(Icons.call_rounded, size: 18),
                             label: const Text(
-                              'CALL CUSTOMER',
+                              'Call',
                               style: TextStyle(fontWeight: FontWeight.bold),
                             ),
                             style: ElevatedButton.styleFrom(
@@ -526,10 +546,28 @@ class _TaskDetailScreenState extends State<_TaskDetailBody> {
                                   AppTokens.rSm,
                                 ),
                               ),
-                              padding: const EdgeInsets.symmetric(vertical: AppTokens.s12),
+                              padding: const EdgeInsets.symmetric(vertical: 12),
                             ),
-                            onPressed:
-                                () => _callCustomer(widget.order.customerPhone),
+                            onPressed: () => _contactCustomer(whatsApp: false),
+                          ),
+                        ),
+                        const SizedBox(width: AppTokens.s12),
+                        Expanded(
+                          child: OutlinedButton.icon(
+                            icon: const Icon(Icons.chat_rounded, size: 18),
+                            label: const Text(
+                              'WhatsApp',
+                              style: TextStyle(fontWeight: FontWeight.bold),
+                            ),
+                            style: OutlinedButton.styleFrom(
+                              shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(
+                                  AppTokens.rSm,
+                                ),
+                              ),
+                              padding: const EdgeInsets.symmetric(vertical: 12),
+                            ),
+                            onPressed: () => _contactCustomer(whatsApp: true),
                           ),
                         ),
                       ],
@@ -611,7 +649,10 @@ class _TaskDetailScreenState extends State<_TaskDetailBody> {
                       children: [
                         Row(
                           children: [
-                            Icon(Icons.fact_check_outlined, color: scheme.primary),
+                            Icon(
+                              Icons.fact_check_outlined,
+                              color: scheme.primary,
+                            ),
                             const SizedBox(width: AppTokens.s8),
                             Text(
                               'Items Checklist',
@@ -659,7 +700,10 @@ class _TaskDetailScreenState extends State<_TaskDetailBody> {
                               fontSize: 14,
                               decoration:
                                   isChecked ? TextDecoration.lineThrough : null,
-                              color: isChecked ? scheme.onSurfaceVariant : scheme.onSurface,
+                              color:
+                                  isChecked
+                                      ? scheme.onSurfaceVariant
+                                      : scheme.onSurface,
                             ),
                           ),
                           subtitle: Text(
@@ -668,7 +712,9 @@ class _TaskDetailScreenState extends State<_TaskDetailBody> {
                               fontSize: 12,
                               color:
                                   isChecked
-                                      ? scheme.onSurfaceVariant.withValues(alpha: 0.5)
+                                      ? scheme.onSurfaceVariant.withValues(
+                                        alpha: 0.5,
+                                      )
                                       : scheme.onSurfaceVariant,
                             ),
                           ),
@@ -707,14 +753,22 @@ class _TaskDetailScreenState extends State<_TaskDetailBody> {
                             () => _showReportDeliveryFailure(orderProvider),
                         style: OutlinedButton.styleFrom(
                           foregroundColor: scheme.error,
-                          side: BorderSide(color: scheme.error.withValues(alpha: 0.5)),
-                          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                          side: BorderSide(
+                            color: scheme.error.withValues(alpha: 0.5),
+                          ),
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 16,
+                            vertical: 8,
+                          ),
                           shape: const StadiumBorder(),
                         ),
                         icon: const Icon(Icons.cancel_outlined, size: 16),
                         label: const Text(
                           "Cancel Delivery / Report Failure",
-                          style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13),
+                          style: TextStyle(
+                            fontWeight: FontWeight.bold,
+                            fontSize: 13,
+                          ),
                         ),
                       ),
                       const SizedBox(height: AppTokens.s8),
@@ -722,8 +776,9 @@ class _TaskDetailScreenState extends State<_TaskDetailBody> {
                         text: _getNextStatusText(widget.order.status),
                         color: nextColor,
                         enabled: !_isAdvancing,
-                        onSwipeCompleted: () =>
-                            _advance(orderProvider, nextStatus, nextColor),
+                        onSwipeCompleted:
+                            () =>
+                                _advance(orderProvider, nextStatus, nextColor),
                       ),
                     ],
                   ),

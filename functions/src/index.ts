@@ -31,6 +31,18 @@ const MAX_OTP_ATTEMPTS = 5;
 const OTP_LOCKOUT_MINUTES = 10;
 const MAX_OTP_TOTAL_ATTEMPTS = 15;
 const ACTIVE_ORDER_STATUSES = ["pending", "assigned", "picked_up", "out_for_delivery"];
+// Statuses in which a rider is holding an order (pending has no rider yet).
+const RIDER_HELD_STATUSES = ["assigned", "picked_up", "out_for_delivery"];
+// One rider can't hoard the pool: at most this many held orders at a time
+// (config.maxActiveOrdersPerRider overrides, clamped to 1..20).
+const DEFAULT_MAX_ACTIVE_ORDERS_PER_RIDER = 3;
+// The delivery code is valid this long once the order is out for delivery. A
+// customer who wasn't ready can ask for a fresh one.
+const OTP_VALID_MINUTES = 120;
+const MAX_OTP_REGENERATIONS = 5;
+// A handover more than this far from the customer's pin is flagged for review
+// (recorded, never blocked: GPS drift and pin error are normal).
+const DELIVERY_FAR_METERS = 500;
 const ACTIVE_ORDER_MESSAGE =
   "You already have an active order in progress. You can only place one order at a time.";
 
@@ -229,6 +241,24 @@ function safeEqual(a: string, b: string): boolean {
   const ab = Buffer.from(a);
   const bb = Buffer.from(b);
   return ab.length === bb.length && timingSafeEqual(ab, bb);
+}
+
+/** A rider location sent with a status change, or null when none was sent.
+ * Present-but-malformed is rejected rather than silently dropped. */
+function parseRiderLocation(raw: unknown): { lat: number; lng: number; accuracy: number | null } | null {
+  if (raw === undefined || raw === null) return null;
+  const loc = raw as { lat?: unknown; lng?: unknown; accuracy?: unknown };
+  if (
+    typeof loc.lat !== "number" ||
+    typeof loc.lng !== "number" ||
+    !isValidCoordinate(loc.lat, loc.lng)
+  ) {
+    throw new HttpsError("invalid-argument", "The location sent with this update is invalid.");
+  }
+  const accuracy = typeof loc.accuracy === "number" && Number.isFinite(loc.accuracy) && loc.accuracy >= 0
+    ? loc.accuracy
+    : null;
+  return { lat: loc.lat, lng: loc.lng, accuracy };
 }
 
 /** First name only — all a rider needs before accepting an order. */
@@ -880,6 +910,7 @@ export const verifyDeliveryOtp = onCall({ region: REGION, enforceAppCheck: proce
     throw new HttpsError("invalid-argument", "Order ID and a 4-digit OTP are required.");
   }
   await assertActiveRider(uid);
+  const riderLocation = parseRiderLocation(request.data?.location);
 
   const orderRef = db.collection("orders").doc(orderId);
 
@@ -933,6 +964,13 @@ export const verifyDeliveryOtp = onCall({ region: REGION, enforceAppCheck: proce
     // later rate changes never reprice a rider's history.
     const configSnap = await tx.get(db.collection("config").doc("app"));
     const riderPayout = Number(configSnap.data()?.riderPayoutPerDelivery ?? 30);
+
+    // An expired code is refused before it is compared, so the rider's
+    // attempts aren't spent on a code that can no longer work.
+    const expiresAtMs = secret.expiresAt instanceof Timestamp ? secret.expiresAt.toMillis() : 0;
+    if (expiresAtMs > 0 && expiresAtMs < Date.now()) {
+      return { kind: "expired" as const };
+    }
 
     const totalAttempts = Number(secret.totalAttempts ?? secret.attempts ?? 0);
     if (totalAttempts >= MAX_OTP_TOTAL_ATTEMPTS) {
@@ -1007,7 +1045,32 @@ export const verifyDeliveryOtp = onCall({ region: REGION, enforceAppCheck: proce
     }
 
     const deliveredNow = Timestamp.now();
+    // Where the handover happened, and how far that is from the customer's
+    // pin. Recorded for disputes; a far handover is flagged, never blocked.
+    let proof: Record<string, unknown> = {};
+    if (riderLocation) {
+      // An order without a pin has null coordinates; Number(null) is 0, which
+      // would read as a real point off the coast of Africa.
+      const hasPin =
+        typeof order.latitude === "number" &&
+        typeof order.longitude === "number" &&
+        isValidCoordinate(order.latitude, order.longitude);
+      const distance = hasPin
+        ? Math.round(haversineMeters(riderLocation.lat, riderLocation.lng, order.latitude, order.longitude))
+        : null;
+      proof = {
+        deliveryLocation: {
+          lat: riderLocation.lat,
+          lng: riderLocation.lng,
+          accuracy: riderLocation.accuracy,
+          at: deliveredNow,
+        },
+        deliveryDistanceMeters: distance,
+        deliveryFar: distance !== null && distance > DELIVERY_FAR_METERS,
+      };
+    }
     tx.update(orderRef, {
+      ...proof,
       status: "delivered",
       // The reservation was consumed by this delivery (see the "sale" ledger
       // entries above) — flag it so no later cancel can release it again.
@@ -1024,6 +1087,11 @@ export const verifyDeliveryOtp = onCall({ region: REGION, enforceAppCheck: proce
   });
 
   switch (outcome.kind) {
+    case "expired":
+      throw new HttpsError(
+        "failed-precondition",
+        "This delivery code has expired. Ask the customer to open their order and get a new code."
+      );
     case "hard_locked":
       throw new HttpsError(
         "resource-exhausted",
@@ -1123,6 +1191,12 @@ export const acceptOrder = onCall({ region: REGION, enforceAppCheck: process.env
     throw new HttpsError("failed-precondition", "Go on-duty before accepting orders.");
   }
 
+  const configSnap = await db.collection("config").doc("app").get();
+  const configuredMax = Number(configSnap.data()?.maxActiveOrdersPerRider);
+  const maxActiveOrders = Number.isFinite(configuredMax) && configuredMax >= 1
+    ? Math.min(Math.floor(configuredMax), 20)
+    : DEFAULT_MAX_ACTIVE_ORDERS_PER_RIDER;
+
   const orderRef = db.collection("orders").doc(orderId);
   const outcome = await db.runTransaction(async (tx) => {
     const snap = await tx.get(orderRef);
@@ -1139,6 +1213,17 @@ export const acceptOrder = onCall({ region: REGION, enforceAppCheck: process.env
       return "taken";
     }
 
+    // A rider may only hold so many orders at once. Counted inside the
+    // transaction so two simultaneous accepts can't both slip under the cap.
+    const heldSnap = await tx.get(
+      db.collection("orders")
+        .where("deliveryBoyId", "==", uid)
+        .where("status", "in", RIDER_HELD_STATUSES)
+    );
+    if (heldSnap.size >= maxActiveOrders) {
+      return "at_capacity";
+    }
+
     tx.delete(db.collection("orderOffers").doc(orderId));
     tx.update(orderRef, {
       status: "assigned",
@@ -1153,7 +1238,162 @@ export const acceptOrder = onCall({ region: REGION, enforceAppCheck: process.env
   if (outcome === "taken") {
     throw new HttpsError("failed-precondition", "This order was already accepted by another rider.");
   }
+  if (outcome === "at_capacity") {
+    throw new HttpsError(
+      "failed-precondition",
+      `You already have ${maxActiveOrders} active deliveries. Finish one before accepting another.`
+    );
+  }
   return { success: true };
+});
+
+/**
+ * Moves the rider's own order one step forward (assigned → picked_up →
+ * out_for_delivery) and records when and — if the app could get a fix — where.
+ * This is the only path for those transitions (the rules no longer let a rider
+ * write status directly), so the timestamps and locations can't be skipped.
+ * Going out for delivery also starts the delivery code's validity window.
+ * 'delivered' remains verifyDeliveryOtp's alone.
+ */
+export const advanceOrderStatus = onCall({ region: REGION, enforceAppCheck: process.env.FUNCTIONS_EMULATOR !== "true" }, async (request) => {
+  const uid = request.auth?.uid;
+  if (!uid) {
+    throw new HttpsError("unauthenticated", "Sign in first.");
+  }
+  await checkRateLimit(uid, "advanceOrderStatus");
+
+  const orderId = String(request.data?.orderId ?? "").trim();
+  if (!orderId) {
+    throw new HttpsError("invalid-argument", "orderId is required.");
+  }
+  const location = parseRiderLocation(request.data?.location);
+  await assertActiveRider(uid);
+
+  const NEXT: Record<string, string> = { assigned: "picked_up", picked_up: "out_for_delivery" };
+  const orderRef = db.collection("orders").doc(orderId);
+  const privateRef = orderRef.collection("private").doc("delivery");
+
+  const status = await db.runTransaction(async (tx) => {
+    const snap = await tx.get(orderRef);
+    if (!snap.exists) {
+      throw new HttpsError("not-found", "Order not found.");
+    }
+    const order = snap.data() as FirebaseFirestore.DocumentData;
+    if (order.deliveryBoyId !== uid) {
+      throw new HttpsError("permission-denied", "This order isn't assigned to you.");
+    }
+    const requested = String(request.data?.status ?? "").trim();
+    const next = NEXT[order.status];
+    if (!next) {
+      throw new HttpsError(
+        "failed-precondition",
+        order.status === "cancelled"
+          ? "This order was cancelled. Go back and check its status."
+          : `This order can't be moved on from '${order.status}'.`
+      );
+    }
+    // Idempotent retry: the client already asked for the state it is in.
+    if (requested && requested === order.status) {
+      return order.status as string;
+    }
+    if (requested && requested !== next) {
+      throw new HttpsError("failed-precondition", `The next step for this order is '${next}'.`);
+    }
+
+    const now = Timestamp.now();
+    const point = location
+      ? { lat: location.lat, lng: location.lng, accuracy: location.accuracy, at: now }
+      : null;
+    const update: Record<string, unknown> = { status: next, updatedAt: now };
+    if (next === "picked_up") {
+      update.pickedUpAt = now;
+      update.pickupLocation = point;
+    } else {
+      update.outForDeliveryAt = now;
+      update.dispatchLocation = point;
+    }
+    tx.update(orderRef, update);
+
+    if (next === "out_for_delivery") {
+      // The code starts counting down now; the customer can refresh it.
+      tx.set(
+        privateRef,
+        { expiresAt: Timestamp.fromMillis(now.toMillis() + OTP_VALID_MINUTES * 60_000) },
+        { merge: true }
+      );
+    }
+    return next;
+  });
+
+  return { success: true, status };
+});
+
+/**
+ * Gives the ordering customer a fresh delivery code — for a code that was
+ * shared by mistake or has expired. Resets the failed-attempt counters and, if
+ * the order is already out for delivery, restarts the validity window.
+ */
+export const regenerateDeliveryOtp = onCall({ region: REGION, enforceAppCheck: process.env.FUNCTIONS_EMULATOR !== "true" }, async (request) => {
+  const uid = request.auth?.uid;
+  if (!uid) {
+    throw new HttpsError("unauthenticated", "Sign in first.");
+  }
+  await checkRateLimit(uid, "regenerateDeliveryOtp");
+
+  const orderId = String(request.data?.orderId ?? "").trim();
+  if (!orderId) {
+    throw new HttpsError("invalid-argument", "orderId is required.");
+  }
+
+  const orderRef = db.collection("orders").doc(orderId);
+  const privateRef = orderRef.collection("private").doc("delivery");
+
+  return db.runTransaction(async (tx) => {
+    const [orderSnap, privateSnap] = await Promise.all([tx.get(orderRef), tx.get(privateRef)]);
+    if (!orderSnap.exists) {
+      throw new HttpsError("not-found", "Order not found.");
+    }
+    const order = orderSnap.data() as FirebaseFirestore.DocumentData;
+    if (order.customerId !== uid) {
+      throw new HttpsError("permission-denied", "You can only refresh the code for your own orders.");
+    }
+    if (!RIDER_HELD_STATUSES.includes(order.status)) {
+      throw new HttpsError(
+        "failed-precondition",
+        order.status === "pending"
+          ? "A delivery partner hasn't accepted this order yet."
+          : "This order is closed, so its delivery code can't be refreshed."
+      );
+    }
+    const secret = (privateSnap.data() ?? {}) as FirebaseFirestore.DocumentData;
+    const regenerations = Number(secret.regenerations ?? 0);
+    if (regenerations >= MAX_OTP_REGENERATIONS) {
+      throw new HttpsError(
+        "resource-exhausted",
+        "You've refreshed this code too many times. Contact support if you need help."
+      );
+    }
+
+    const now = Timestamp.now();
+    const otp = String(randomInt(1000, 10000));
+    const expiresAt = order.status === "out_for_delivery"
+      ? Timestamp.fromMillis(now.toMillis() + OTP_VALID_MINUTES * 60_000)
+      : null;
+    tx.set(
+      privateRef,
+      {
+        otp,
+        attempts: 0,
+        totalAttempts: 0,
+        lockedUntil: null,
+        regenerations: regenerations + 1,
+        regeneratedAt: now,
+        expiresAt,
+      },
+      { merge: true }
+    );
+    return { otp, expiresAtMs: expiresAt ? expiresAt.toMillis() : null };
+  });
 });
 
 /**

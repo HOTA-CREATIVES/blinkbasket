@@ -15,3 +15,10 @@ String formatDateTime(DateTime date) {
   final period = date.hour < 12 ? 'AM' : 'PM';
   return '${formatDate(date)}, $hour12:$minute $period';
 }
+
+/// `4:05 PM`.
+String formatTime(DateTime date) {
+  final hour12 = date.hour % 12 == 0 ? 12 : date.hour % 12;
+  final minute = date.minute.toString().padLeft(2, '0');
+  return '$hour12:$minute ${date.hour < 12 ? 'AM' : 'PM'}';
+}

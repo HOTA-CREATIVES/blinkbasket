@@ -195,13 +195,10 @@ service cloud.firestore {
             && (request.resource.data.get('ratingComment', null) == null
                 || (request.resource.data.ratingComment is string
                     && request.resource.data.ratingComment.size() <= 500)))
-        // Rider: advance own order exactly one step forward.
-        // 'delivered' is reachable only through the verifyDeliveryOtp Cloud Function.
-        || (isDelivery()
-            && resource.data.deliveryBoyId == request.auth.uid
-            && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'updatedAt'])
-            && ((resource.data.status == 'assigned' && request.resource.data.status == 'picked_up')
-              || (resource.data.status == 'picked_up' && request.resource.data.status == 'out_for_delivery')));
+        // Riders never write an order directly. Status changes go through the
+        // advanceOrderStatus / verifyDeliveryOtp callables, which record when
+        // and where each step happened and can't be skipped by a direct write.
+        ;
 
       // Delivery OTP: the customer may re-read it; riders and admins cannot.
       match /private/{privateDoc} {

@@ -1,16 +1,19 @@
 import 'dart:async';
 import 'package:flutter/foundation.dart';
 import '../../domain/entities/order.dart';
+import '../../domain/entities/delivery_otp.dart';
+import '../../domain/entities/rider_location.dart';
 import '../../domain/repositories/order_repository.dart';
 import '../../domain/usecases/place_order_usecase.dart';
 import '../../domain/usecases/verify_delivery_otp_usecase.dart';
 import '../../domain/usecases/stream_customer_orders_usecase.dart';
 import '../../domain/usecases/stream_delivery_orders_usecase.dart';
-import '../../domain/usecases/update_order_status_usecase.dart';
+import '../../domain/usecases/advance_order_status_usecase.dart';
 import '../../domain/usecases/stream_incoming_offers_usecase.dart';
 import '../../domain/usecases/accept_order_usecase.dart';
 import '../../data/repositories/firebase_order_repository.dart';
 import '../models/user_model.dart';
+import '../utils/app_exception.dart';
 import '../utils/shared_stream.dart';
 
 class OrderProvider with ChangeNotifier {
@@ -20,7 +23,7 @@ class OrderProvider with ChangeNotifier {
   late final VerifyDeliveryOtpUseCase _verifyDeliveryOtpUseCase;
   late final StreamCustomerOrdersUseCase _streamCustomerOrdersUseCase;
   late final StreamDeliveryOrdersUseCase _streamDeliveryOrdersUseCase;
-  late final UpdateOrderStatusUseCase _updateOrderStatusUseCase;
+  late final AdvanceOrderStatusUseCase _advanceOrderStatusUseCase;
   late final StreamIncomingOffersUseCase _streamIncomingOffersUseCase;
   late final AcceptOrderUseCase _acceptOrderUseCase;
 
@@ -50,7 +53,7 @@ class OrderProvider with ChangeNotifier {
     _verifyDeliveryOtpUseCase = VerifyDeliveryOtpUseCase(_orderRepository);
     _streamCustomerOrdersUseCase = StreamCustomerOrdersUseCase(_orderRepository);
     _streamDeliveryOrdersUseCase = StreamDeliveryOrdersUseCase(_orderRepository);
-    _updateOrderStatusUseCase = UpdateOrderStatusUseCase(_orderRepository);
+    _advanceOrderStatusUseCase = AdvanceOrderStatusUseCase(_orderRepository);
     _streamIncomingOffersUseCase = StreamIncomingOffersUseCase(_orderRepository);
     _acceptOrderUseCase = AcceptOrderUseCase(_orderRepository);
   }
@@ -175,8 +178,9 @@ class OrderProvider with ChangeNotifier {
 
   /// Rider-side delivery confirmation. Returns null on success,
   /// or a user-readable error message.
-  Future<String?> verifyDelivery(String orderId, String otp, double collectedAmount) async {
-    return _verifyDeliveryOtpUseCase(orderId, otp, collectedAmount);
+  Future<String?> verifyDelivery(String orderId, String otp, double collectedAmount,
+      {RiderLocation? location}) async {
+    return _verifyDeliveryOtpUseCase(orderId, otp, collectedAmount, location: location);
   }
 
   /// Customer-side OTP lookup for an active order.
@@ -184,15 +188,25 @@ class OrderProvider with ChangeNotifier {
     return _orderRepository.getOrderOtp(orderId);
   }
 
-  Future<String?> updateStatus(String orderId, String status) async {
+  /// The delivery code with its expiry, for the customer's own order.
+  Future<DeliveryOtp?> getDeliveryOtp(String orderId) =>
+      _orderRepository.getDeliveryOtp(orderId);
+
+  /// Replaces the delivery code. Returns the new one, or throws an
+  /// [AppException] whose message is written for the customer.
+  Future<DeliveryOtp> regenerateDeliveryOtp(String orderId) =>
+      _orderRepository.regenerateDeliveryOtp(orderId);
+
+  /// Rider: moves the order to its next step, recording where they were.
+  /// Returns null on success, or a message for the rider.
+  Future<String?> advanceStatus(String orderId, String nextStatus,
+      {RiderLocation? location}) async {
     try {
-      await _updateOrderStatusUseCase(orderId, status);
-      return null;
+      return await _advanceOrderStatusUseCase(orderId, nextStatus, location: location);
     } catch (e) {
-      debugPrint("Failed to update status: $e");
-      // Never surface the raw exception text; the usual cause is the order
-      // having changed underneath the rider (e.g. cancelled by the customer).
-      return "This order may have been cancelled or changed. Go back and check its latest status.";
+      debugPrint("Failed to advance order: $e");
+      return userMessageFor(e,
+          fallback: "Couldn't update this order. Go back and check its latest status.");
     }
   }
 

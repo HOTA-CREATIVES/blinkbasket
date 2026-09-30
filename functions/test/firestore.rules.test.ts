@@ -170,7 +170,7 @@ describe("firestore.rules — orders", () => {
     });
   });
 
-  it("lets an assigned rider advance status exactly one step forward", async () => {
+  it("no longer lets a rider write status directly, even one legitimate step (advanceOrderStatus only)", async () => {
     await testEnv.withSecurityRulesDisabled(async (ctx) => {
       await setDoc(doc(ctx.firestore(), "orders/order1"), {
         deliveryBoyId: "rider1",
@@ -180,9 +180,11 @@ describe("firestore.rules — orders", () => {
     });
 
     const asRider = testEnv.authenticatedContext("rider1", { delivery: true }).firestore();
-    await assertSucceeds(
+    await assertFails(
       updateDoc(doc(asRider, "orders/order1"), { status: "picked_up", updatedAt: new Date() })
     );
+    // The assigned rider can still read the order they are delivering.
+    await assertSucceeds(getDoc(doc(asRider, "orders/order1")));
   });
 
   it("blocks a rider from skipping a status step", async () => {

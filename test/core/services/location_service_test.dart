@@ -3,6 +3,7 @@ import 'package:hypermart/core/services/location_service.dart';
 
 void main() {
   _collectorTests();
+  _riderLocationTests();
   group('LocationService.evaluate', () {
     LocationResult eval({double accuracy = 12, bool mocked = false}) => LocationService.evaluate(
           latitude: 16.546,
@@ -146,6 +147,46 @@ void _collectorTests() {
         expect(LocationResult.failure(f).canOpenSettings, isTrue);
         expect(LocationResult.failure(f).canRetry, isFalse);
       }
+    });
+  });
+}
+
+void _riderLocationTests() {
+  group('LocationService.riderLocationFrom', () {
+    test('keeps the coordinates and their accuracy', () {
+      final loc = LocationService.riderLocationFrom(
+          latitude: 16.5, longitude: 81.5, accuracyMeters: 12, isMocked: false);
+      expect(loc?.lat, 16.5);
+      expect(loc?.lng, 81.5);
+      expect(loc?.accuracyMeters, 12);
+    });
+
+    test('records nothing for a spoofed position', () {
+      expect(
+        LocationService.riderLocationFrom(
+            latitude: 16.5, longitude: 81.5, accuracyMeters: 5, isMocked: true),
+        isNull,
+      );
+    });
+
+    test('accepts a coarse reading (the server stores the accuracy next to it)', () {
+      final loc = LocationService.riderLocationFrom(
+          latitude: 16.5, longitude: 81.5, accuracyMeters: 800, isMocked: false);
+      expect(loc?.accuracyMeters, 800);
+    });
+
+    test('drops a nonsensical negative accuracy but keeps the point', () {
+      final loc = LocationService.riderLocationFrom(
+          latitude: 16.5, longitude: 81.5, accuracyMeters: -1, isMocked: false);
+      expect(loc, isNotNull);
+      expect(loc?.accuracyMeters, isNull);
+    });
+
+    test('toMap omits accuracy when unknown', () {
+      final map = LocationService.riderLocationFrom(
+              latitude: 1, longitude: 2, accuracyMeters: -1, isMocked: false)!
+          .toMap();
+      expect(map, {'lat': 1.0, 'lng': 2.0});
     });
   });
 }

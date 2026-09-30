@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'package:geolocator/geolocator.dart';
+import '../../domain/entities/rider_location.dart';
 
 /// Why a location fix could not be produced.
 enum LocationFailure {
@@ -146,6 +147,59 @@ class LocationService {
     } catch (_) {
       return const LocationResult.failure(LocationFailure.unknown);
     }
+  }
+
+  /// How long [quickFix] may take. A rider mid-swipe must not wait for the
+  /// 15-second accuracy search a customer's address needs.
+  static const Duration quickFixTimeout = Duration(seconds: 4);
+
+  /// A best-effort position to record with a rider's action (pickup, set off,
+  /// handover). Never blocks past [quickFixTimeout], never fails the action —
+  /// null just means "no location recorded" — and any accuracy is accepted
+  /// because the server stores the accuracy alongside it. A spoofed position
+  /// is not recorded at all.
+  static Future<RiderLocation?> quickFix() async {
+    try {
+      if (!await Geolocator.isLocationServiceEnabled()) return null;
+      var permission = await Geolocator.checkPermission();
+      if (permission == LocationPermission.denied) {
+        permission = await Geolocator.requestPermission();
+      }
+      if (permission == LocationPermission.denied ||
+          permission == LocationPermission.deniedForever) {
+        return null;
+      }
+      final position = await Geolocator.getCurrentPosition(
+        locationSettings: const LocationSettings(
+          accuracy: LocationAccuracy.high,
+          timeLimit: quickFixTimeout,
+        ),
+      );
+      return riderLocationFrom(
+        latitude: position.latitude,
+        longitude: position.longitude,
+        accuracyMeters: position.accuracy,
+        isMocked: position.isMocked,
+      );
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// Pure conversion of a raw reading into what is sent to the server: nothing
+  /// for a spoofed reading, otherwise the coordinates with their accuracy.
+  static RiderLocation? riderLocationFrom({
+    required double latitude,
+    required double longitude,
+    required double accuracyMeters,
+    required bool isMocked,
+  }) {
+    if (isMocked) return null;
+    return RiderLocation(
+      lat: latitude,
+      lng: longitude,
+      accuracyMeters: accuracyMeters >= 0 ? accuracyMeters : null,
+    );
   }
 
   static LocationSample _sampleOf(Position p) => LocationSample(

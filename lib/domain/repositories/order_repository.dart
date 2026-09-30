@@ -1,4 +1,6 @@
 import '../entities/order.dart';
+import '../entities/delivery_otp.dart';
+import '../entities/rider_location.dart';
 import '../../core/models/user_model.dart';
 
 /// Result of a server-side order placement via the placeOrder Cloud Function.
@@ -65,14 +67,29 @@ abstract class OrderRepository {
   /// Function and records the cash the rider confirms collecting
   /// ([collectedAmount] must equal the order total). Returns null on success,
   /// or a user-readable error message.
-  Future<String?> verifyDeliveryOtp(String orderId, String otp, double collectedAmount);
+  ///
+  /// [location] is where the rider is handing over, recorded as proof of
+  /// delivery (optional: a rider without a GPS fix can still deliver).
+  Future<String?> verifyDeliveryOtp(String orderId, String otp, double collectedAmount,
+      {RiderLocation? location});
 
   /// Reads the delivery OTP for one of the customer's own orders.
   /// Only callable by the ordering customer (Firestore rules enforce this).
   /// Riders must get the OTP verbally from the customer.
   Future<String?> getOrderOtp(String orderId);
 
-  Future<void> updateOrderStatus(String orderId, String status);
+  /// The code and its expiry for one of the customer's own orders, or null
+  /// when it can't be read (offline, or the order has no code).
+  Future<DeliveryOtp?> getDeliveryOtp(String orderId);
+
+  /// Replaces the delivery code (shared by mistake, or expired). Returns the
+  /// new code, or throws an [AppException] with a message for the customer.
+  Future<DeliveryOtp> regenerateDeliveryOtp(String orderId);
+
+  /// Moves the rider's order to [nextStatus] through the advanceOrderStatus
+  /// callable, recording when and where. Returns null on success, or a
+  /// message for the rider.
+  Future<String?> advanceOrderStatus(String orderId, String nextStatus, {RiderLocation? location});
 
   /// Customer-submitted 1-5 star rating for a delivered order. Write-once,
   /// enforced by Firestore rules (rejected if the order isn't 'delivered'

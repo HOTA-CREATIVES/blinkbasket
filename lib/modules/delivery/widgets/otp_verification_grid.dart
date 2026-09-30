@@ -3,6 +3,8 @@ import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 import '../../../core/design/app_tokens.dart';
 import '../../../core/providers/order_provider.dart';
+import '../../../core/services/location_service.dart';
+import '../../../domain/entities/rider_location.dart';
 import '../../../core/utils/money.dart';
 
 class OtpVerificationGrid extends StatefulWidget {
@@ -14,11 +16,16 @@ class OtpVerificationGrid extends StatefulWidget {
   final double amountDue;
   final VoidCallback onSuccess;
 
+  /// Takes the rider's position for the proof-of-delivery record. Defaults to
+  /// the device GPS; injectable so it can be tested.
+  final Future<RiderLocation?> Function()? locate;
+
   const OtpVerificationGrid({
     super.key,
     required this.orderId,
     required this.amountDue,
     required this.onSuccess,
+    this.locate,
   });
 
   @override
@@ -35,6 +42,10 @@ class _OtpVerificationGridState extends State<OtpVerificationGrid>
       List.generate(4, (_) => FocusNode(skipTraversal: true));
   bool _isVerifying = false;
   bool _cashConfirmed = false;
+
+  // Started when the dialog opens so the fix is ready by the time the rider has
+  // typed the code, instead of adding its wait to the verification.
+  late final Future<RiderLocation?> _location;
   String? _serverError;
 
   late AnimationController _shakeController;
@@ -43,6 +54,7 @@ class _OtpVerificationGridState extends State<OtpVerificationGrid>
   @override
   void initState() {
     super.initState();
+    _location = _takeLocation();
     _controllers = List.generate(4, (_) => TextEditingController());
     _focusNodes = List.generate(4, (_) => FocusNode());
 
@@ -76,6 +88,16 @@ class _OtpVerificationGridState extends State<OtpVerificationGrid>
     super.dispose();
   }
 
+  /// The rider's position for the proof-of-delivery record. A failure here
+  /// must never stop a delivery, so any error just means "no location".
+  Future<RiderLocation?> _takeLocation() async {
+    try {
+      return await (widget.locate ?? LocationService.quickFix)();
+    } catch (_) {
+      return null;
+    }
+  }
+
   Future<void> _verifyOtp() async {
     // Auto-submit on the 4th digit plus the button (or a re-edit of the last
     // box) can fire twice; each wrong call burns a server-side attempt.
@@ -104,7 +126,17 @@ class _OtpVerificationGridState extends State<OtpVerificationGrid>
 
     try {
       final orderProvider = Provider.of<OrderProvider>(context, listen: false);
-      final error = await orderProvider.verifyDelivery(widget.orderId, otp, widget.amountDue);
+      // Whatever the fix has produced by now; never hold up the delivery for it.
+      final location = await _location.timeout(
+        const Duration(seconds: 1),
+        onTimeout: () => null,
+      );
+      final error = await orderProvider.verifyDelivery(
+        widget.orderId,
+        otp,
+        widget.amountDue,
+        location: location,
+      );
 
       if (!mounted) return;
 

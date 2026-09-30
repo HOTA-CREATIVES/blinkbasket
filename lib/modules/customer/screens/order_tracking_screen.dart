@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:provider/provider.dart';
 import '../../../core/design/app_tokens.dart';
+import '../../../core/design/widgets/delivery_otp_card.dart';
 import '../../../core/design/widgets/empty_state.dart';
 import '../../../core/design/widgets/leaflet_location_picker.dart';
 import '../../../core/design/widgets/skeleton.dart';
@@ -13,6 +14,7 @@ import '../../../core/providers/order_provider.dart';
 import '../../../core/utils/reorder_helper.dart';
 import '../../../core/providers/product_provider.dart';
 import '../../../core/utils/date_format.dart';
+import '../../../core/utils/contact_launcher.dart';
 import '../../../core/utils/money.dart';
 import '../../../core/utils/route_generator.dart';
 import '../../../domain/entities/app_config.dart';
@@ -42,11 +44,21 @@ class OrderTrackingScreen extends StatelessWidget {
     }
   }
 
-  Future<void> _callRider(String phone) async {
-    final uri = Uri(scheme: 'tel', path: phone);
-    if (await canLaunchUrl(uri)) {
-      await launchUrl(uri);
-    }
+  /// Calls or WhatsApps the rider, and says so when it can't be done — a
+  /// button that silently does nothing looks broken.
+  Future<void> _contactRider(BuildContext context, Order order,
+      {required bool whatsApp}) async {
+    final messenger = ScaffoldMessenger.of(context);
+    final launcher = ContactLauncher();
+    final shortId = order.id.substring(0, 6).toUpperCase();
+    final result = whatsApp
+        ? await launcher.whatsApp(
+            order.deliveryBoyPhone,
+            message: 'Hi, this is ${order.customerName} about order #$shortId.',
+          )
+        : await launcher.call(order.deliveryBoyPhone);
+    final problem = ContactLauncher.messageFor(result, what: whatsApp ? 'WhatsApp' : 'the phone app');
+    if (problem != null) messenger.showSnackBar(SnackBar(content: Text(problem)));
   }
 
   @override
@@ -231,7 +243,13 @@ class OrderTrackingScreen extends StatelessWidget {
                 const SizedBox(height: AppTokens.s16),
               ],
 
-              // Rider card with call button
+              // The code the rider will ask for, while the order is with a rider.
+              if (const ['assigned', 'picked_up', 'out_for_delivery'].contains(order.status)) ...[
+                DeliveryOtpCard(orderId: order.id, status: order.status),
+                const SizedBox(height: AppTokens.s16),
+              ],
+
+              // Rider card with call and WhatsApp
               if (order.deliveryBoyName != null &&
                   order.status != 'cancelled' &&
                   order.status != 'delivered') ...[
@@ -249,15 +267,33 @@ class OrderTrackingScreen extends StatelessWidget {
                     subtitle: const Text('Your local delivery partner'),
                     trailing: (order.deliveryBoyPhone != null &&
                             order.deliveryBoyPhone!.isNotEmpty)
-                        ? IconButton.filled(
-                            style: IconButton.styleFrom(
-                              backgroundColor: scheme.primary,
-                              foregroundColor: scheme.onPrimary,
-                            ),
-                            icon: const Icon(Icons.call_rounded, size: 20),
-                            tooltip: 'Call rider',
-                            onPressed: () =>
-                                _callRider(order.deliveryBoyPhone!),
+                        ? Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              IconButton.outlined(
+                                icon: const Icon(Icons.chat_rounded, size: 20),
+                                tooltip: 'Message rider on WhatsApp',
+                                onPressed: () => _contactRider(
+                                  context,
+                                  order,
+                                  whatsApp: true,
+                                ),
+                              ),
+                              const SizedBox(width: AppTokens.s8),
+                              IconButton.filled(
+                                style: IconButton.styleFrom(
+                                  backgroundColor: scheme.primary,
+                                  foregroundColor: scheme.onPrimary,
+                                ),
+                                icon: const Icon(Icons.call_rounded, size: 20),
+                                tooltip: 'Call rider',
+                                onPressed: () => _contactRider(
+                                  context,
+                                  order,
+                                  whatsApp: false,
+                                ),
+                              ),
+                            ],
                           )
                         : null,
                   ),
