@@ -6,6 +6,7 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:google_sign_in/google_sign_in.dart';
 import '../../domain/repositories/auth_repository.dart';
 import '../../core/models/user_model.dart';
+import '../../core/utils/app_exception.dart';
 
 class FirebaseAuthRepository implements AuthRepository {
   final FirebaseAuth _auth = FirebaseAuth.instance;
@@ -37,7 +38,7 @@ class FirebaseAuthRepository implements AuthRepository {
         errorMessage: _getReadableFirebaseAuthError(e.code),
       );
     } catch (e) {
-      return AuthResult(isSuccess: false, errorMessage: e.toString());
+      return AuthResult(isSuccess: false, errorMessage: userMessageFor(e));
     }
   }
 
@@ -121,7 +122,7 @@ class FirebaseAuthRepository implements AuthRepository {
         errorMessage: _getReadableFirebaseAuthError(e.code),
       );
     } catch (e) {
-      return AuthResult(isSuccess: false, errorMessage: e.toString());
+      return AuthResult(isSuccess: false, errorMessage: userMessageFor(e));
     }
   }
 
@@ -209,7 +210,7 @@ class FirebaseAuthRepository implements AuthRepository {
         errorMessage: _getReadableFirebaseAuthError(e.code),
       );
     } catch (e) {
-      return AuthResult(isSuccess: false, errorMessage: e.toString());
+      return AuthResult(isSuccess: false, errorMessage: userMessageFor(e));
     }
   }
 

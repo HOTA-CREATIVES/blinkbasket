@@ -9,6 +9,7 @@ import '../../../core/providers/product_provider.dart';
 import '../../../core/providers/profile_provider.dart';
 import '../../../core/utils/route_generator.dart';
 import '../../../domain/entities/product.dart';
+import '../../../core/utils/app_exception.dart';
 
 class WishlistScreen extends StatefulWidget {
   const WishlistScreen({super.key});
@@ -49,10 +50,10 @@ class _WishlistScreenState extends State<WishlistScreen> {
               stream: context.read<ProductProvider>().streamProducts(),
               builder: (context, snapshot) {
                 if (snapshot.hasError) {
-                  return const EmptyState(
-                    icon: Icons.error_outline_rounded,
+                  return EmptyState.error(
                     title: "Couldn't load your wishlist",
-                    message: 'Check your connection and try again.',
+                    message: userMessageFor(snapshot.error),
+                    onAction: context.read<ProductProvider>().retryProducts,
                   );
                 }
                 if (snapshot.connectionState == ConnectionState.waiting && !snapshot.hasData) {

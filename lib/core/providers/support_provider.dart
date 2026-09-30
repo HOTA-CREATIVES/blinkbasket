@@ -10,6 +10,8 @@ import '../../domain/usecases/support/send_support_message_usecase.dart';
 import '../../domain/usecases/support/update_ticket_status_usecase.dart';
 import '../../data/repositories/firebase_support_repository.dart';
 import '../services/cloudinary_service.dart';
+import '../utils/shared_stream.dart';
+import '../utils/app_exception.dart';
 
 class SupportProvider with ChangeNotifier {
   final SupportRepository _repository;
@@ -43,20 +45,49 @@ class SupportProvider with ChangeNotifier {
     _updateTicketStatusUseCase = UpdateTicketStatusUseCase(_repository);
   }
 
-  Stream<List<SupportTicket>> streamCustomerTickets(String customerId) {
-    return _streamCustomerTicketsUseCase(customerId);
+  // Stable, shared streams (one listener per key however often a screen
+  // rebuilds); see KeyedSharedStreams.
+  late final KeyedSharedStreams<String, List<SupportTicket>> _customerTickets =
+      KeyedSharedStreams((customerId) => _streamCustomerTicketsUseCase(customerId));
+  late final KeyedSharedStreams<String, List<SupportTicket>> _allTickets =
+      KeyedSharedStreams((key) {
+    final parts = key.split('|');
+    final status = parts[0].isEmpty ? null : parts[0];
+    return _streamAllTicketsUseCase(status: status, limit: int.parse(parts[1]));
+  });
+  late final KeyedSharedStreams<String, SupportTicket> _tickets =
+      KeyedSharedStreams((ticketId) => _repository.streamTicket(ticketId));
+  late final KeyedSharedStreams<String, List<SupportMessage>> _messages =
+      KeyedSharedStreams((ticketId) => _streamTicketMessagesUseCase(ticketId));
+
+  Stream<List<SupportTicket>> streamCustomerTickets(String customerId) =>
+      _customerTickets.stream(customerId);
+
+  Stream<List<SupportTicket>> streamAllTickets({String? status, int limit = 100}) =>
+      _allTickets.stream('${status ?? ''}|$limit');
+
+  Stream<SupportTicket> streamTicket(String ticketId) => _tickets.stream(ticketId);
+
+  Stream<List<SupportMessage>> streamMessages(String ticketId) =>
+      _messages.stream(ticketId);
+
+  void retryCustomerTickets(String customerId) => _customerTickets.reconnect(customerId);
+  void retryAllTickets({String? status, int limit = 100}) =>
+      _allTickets.reconnect('${status ?? ''}|$limit');
+
+  /// Drops every cached listener and value (sign-out / user switch), so the
+  /// next account never sees this one's tickets and dead listeners reconnect.
+  void resetSession() {
+    _customerTickets.reset();
+    _allTickets.reset();
+    _tickets.reset();
+    _messages.reset();
   }
 
-  Stream<List<SupportTicket>> streamAllTickets({String? status, int limit = 100}) {
-    return _streamAllTicketsUseCase(status: status, limit: limit);
-  }
-
-  Stream<SupportTicket> streamTicket(String ticketId) {
-    return _repository.streamTicket(ticketId);
-  }
-
-  Stream<List<SupportMessage>> streamMessages(String ticketId) {
-    return _streamTicketMessagesUseCase(ticketId);
+  @override
+  void dispose() {
+    resetSession();
+    super.dispose();
   }
 
   Future<String?> createTicket({
@@ -109,7 +140,7 @@ class SupportProvider with ChangeNotifier {
     } catch (e) {
       _isLoading = false;
       _isUploadingAttachment = false;
-      _errorMessage = e.toString().replaceFirst('Exception: ', '');
+      _errorMessage = userMessageFor(e);
       notifyListeners();
       return null;
     }
@@ -151,7 +182,7 @@ class SupportProvider with ChangeNotifier {
       return true;
     } catch (e) {
       _isUploadingAttachment = false;
-      _errorMessage = e.toString().replaceFirst('Exception: ', '');
+      _errorMessage = userMessageFor(e);
       notifyListeners();
       return false;
     }
@@ -162,7 +193,7 @@ class SupportProvider with ChangeNotifier {
       await _updateTicketStatusUseCase(ticketId: ticketId, status: status);
       notifyListeners();
     } catch (e) {
-      _errorMessage = e.toString().replaceFirst('Exception: ', '');
+      _errorMessage = userMessageFor(e);
       notifyListeners();
     }
   }

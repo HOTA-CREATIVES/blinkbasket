@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../../../core/design/app_tokens.dart';
 import '../../../core/design/widgets/empty_state.dart';
+import '../../../core/design/widgets/cart_changes_dialog.dart';
 import '../../../core/design/widgets/product_card.dart';
 import '../../../core/design/widgets/quantity_stepper.dart';
 import '../../../core/providers/cart_provider.dart';
@@ -78,6 +79,43 @@ class _CartScreenState extends State<CartScreen> {
               child: ListView(
                 padding: const EdgeInsets.all(AppTokens.s16),
                 children: [
+                  // What changed since the cart was loaded (price moved, stock
+                  // ran down, item removed).
+                  if (cartProvider.pendingChanges.isNotEmpty)
+                    Container(
+                      margin: const EdgeInsets.only(bottom: AppTokens.s12),
+                      padding: const EdgeInsets.all(AppTokens.s12),
+                      decoration: BoxDecoration(
+                        color: scheme.tertiaryContainer.withValues(alpha: 0.6),
+                        borderRadius: BorderRadius.circular(AppTokens.rMd),
+                      ),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Row(
+                            children: [
+                              const Icon(Icons.info_outline_rounded, size: 18),
+                              const SizedBox(width: AppTokens.s8),
+                              const Expanded(
+                                child: Text(
+                                  'Your cart was updated',
+                                  style: TextStyle(fontWeight: FontWeight.w800),
+                                ),
+                              ),
+                              TextButton(
+                                onPressed: cartProvider.dismissPendingChanges,
+                                child: const Text('Dismiss'),
+                              ),
+                            ],
+                          ),
+                          for (final change in cartProvider.pendingChanges)
+                            Padding(
+                              padding: const EdgeInsets.only(top: AppTokens.s4),
+                              child: Text(change.message, style: const TextStyle(fontSize: 13)),
+                            ),
+                        ],
+                      ),
+                    ),
                   // Free delivery nudge
                   if (!freeDelivery && amountToFree > 0)
                     Container(
@@ -325,22 +363,42 @@ class _CartScreenState extends State<CartScreen> {
                     padding:
                         const EdgeInsets.symmetric(vertical: AppTokens.s16),
                   ),
-                  onPressed: hasRxItem || !storeOpen
+                  onPressed: hasRxItem || !storeOpen || cartProvider.isValidating
                       ? null
-                      : () {
-                          Navigator.pushNamed(context, RouteGenerator.checkout);
-                        },
-                  child: Text(
-                    !storeOpen
-                        ? 'Store is closed'
-                        : hasRxItem
-                            ? 'Remove prescription items to proceed'
-                            : 'Checkout  •  ${formatRupees(grandTotal)}',
-                  ),
+                      : () => _goToCheckout(context, cartProvider),
+                  child: cartProvider.isValidating
+                      ? const SizedBox(
+                          width: 20,
+                          height: 20,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        )
+                      : Text(
+                          !storeOpen
+                              ? 'Store is closed'
+                              : hasRxItem
+                                  ? 'Remove prescription items to proceed'
+                                  : 'Checkout  •  ${formatRupees(grandTotal)}',
+                        ),
                 ),
               ),
             ),
     );
+  }
+
+  /// Re-checks the cart against the live catalogue first, so the customer
+  /// reaches checkout with today's prices and stock — and is told, not
+  /// surprised, if something changed.
+  Future<void> _goToCheckout(BuildContext context, CartProvider cart) async {
+    final navigator = Navigator.of(context);
+    final result = await cart.revalidate();
+    if (!context.mounted) return;
+
+    if (cart.items.isEmpty) return; // everything was removed; the cart says so
+    if (!result.isClean) {
+      final proceed = await showCartChangesDialog(context, result.changes);
+      if (!proceed || !context.mounted) return;
+    }
+    navigator.pushNamed(RouteGenerator.checkout);
   }
 
   Widget _billRow(BuildContext context, String label, String value) {

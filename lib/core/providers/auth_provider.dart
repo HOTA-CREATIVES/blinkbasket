@@ -10,6 +10,7 @@ import '../../domain/usecases/auth/setup_customer_profile_usecase.dart';
 import '../../domain/usecases/auth/logout_usecase.dart';
 import '../../domain/usecases/auth/discover_user_role_usecase.dart';
 import '../services/push_notification_service.dart';
+import '../utils/app_exception.dart';
 
 enum AuthStatus {
   uninitialized,
@@ -273,7 +274,7 @@ class AuthProvider extends ChangeNotifier {
         return false;
       }
     } catch (e) {
-      _errorMessage = "Account deletion failed: $e";
+      _errorMessage = userMessageFor(e, fallback: "Account deletion failed. Please try again.");
       _setLoading(false);
       return false;
     }

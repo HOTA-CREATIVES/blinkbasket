@@ -1,9 +1,11 @@
+import 'dart:async';
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../../../core/design/app_tokens.dart';
 import '../../../core/design/widgets/leaflet_location_picker.dart';
+import '../../../core/design/widgets/cart_changes_dialog.dart';
 import '../../../core/design/widgets/product_card.dart';
 import '../../../core/design/widgets/swipe_to_confirm_slider.dart';
 import '../../../core/models/user_model.dart';
@@ -186,6 +188,17 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
 
     setState(() => _isSubmitting = true);
 
+    // Last look at the live catalogue before money is committed: if a price or
+    // stock changed since the cart was built, show it and let the customer
+    // confirm with the new total rather than charging a surprise.
+    final validation = await cartProvider.revalidate();
+    if (!mounted) return;
+    if (!validation.isClean) {
+      setState(() => _isSubmitting = false);
+      await showCartChangesDialog(context, validation.changes, continueLabel: 'OK');
+      return;
+    }
+
     final items = cartProvider.items.values
         .map((c) => OrderItem(
               productId: c.product.id,
@@ -250,6 +263,9 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
       );
     } else {
       _showSnackBar(orderProvider.errorMessage ?? 'Order placement failed. Please try again.');
+      // The usual cause is a product that changed under the cart; bring the cart
+      // in line so the next attempt starts from the truth.
+      unawaited(cartProvider.revalidate());
     }
   }
 

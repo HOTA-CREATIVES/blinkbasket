@@ -30,14 +30,19 @@ class OrderProvider with ChangeNotifier {
   bool get isLoading => _isLoading;
   String? get errorMessage => _errorMessage;
 
-  // Single shared listener on the (limit-capped) orders collection. The admin
-  // console mounts three streamAllOrders() StreamBuilders at once — two order
-  // tabs plus the riders tab — which previously opened three separate
-  // snapshots() listeners over up to 300 orders each.
-  StreamSubscription<List<Order>>? _allOrdersSub;
-  final StreamController<List<Order>> _allOrdersController =
-      StreamController<List<Order>>.broadcast();
-  List<Order>? _latestAllOrders;
+  // Every stream below is a stable, shared instance (one Firestore listener no
+  // matter how many widgets read it, or how often they rebuild). Screens may
+  // call these straight from build(); see SharedStream / KeyedSharedStreams.
+  late final KeyedSharedStreams<String, Order> _orderStreams =
+      KeyedSharedStreams((id) => _orderRepository.streamOrder(id));
+  late final KeyedSharedStreams<String, List<Order>> _customerOrderStreams =
+      KeyedSharedStreams((uid) => _streamCustomerOrdersUseCase(uid));
+  late final KeyedSharedStreams<String, List<Order>> _deliveryOrderStreams =
+      KeyedSharedStreams((uid) => _streamDeliveryOrdersUseCase(uid));
+  late final SharedStream<List<Order>> _allOrders =
+      SharedStream(() => _orderRepository.streamAllOrders(limit: _allOrdersLimit));
+  late final SharedStream<List<Order>> _incomingOffers =
+      SharedStream(() => _streamIncomingOffersUseCase(limit: _incomingOffersLimit));
 
   OrderProvider({OrderRepository? repository})
       : _orderRepository = repository ?? FirebaseOrderRepository() {
@@ -50,19 +55,16 @@ class OrderProvider with ChangeNotifier {
     _acceptOrderUseCase = AcceptOrderUseCase(_orderRepository);
   }
   // Streams
-  Stream<Order> streamOrder(String orderId) {
-    return _orderRepository.streamOrder(orderId);
-  }
+  Stream<Order> streamOrder(String orderId) => _orderStreams.stream(orderId);
 
-  Stream<List<Order>> streamCustomerOrders(String customerId) {
-    return _streamCustomerOrdersUseCase(customerId);
-  }
+  Stream<List<Order>> streamCustomerOrders(String customerId) =>
+      _customerOrderStreams.stream(customerId);
 
-  Stream<List<Order>> streamDeliveryBoyOrders(String deliveryBoyId) {
-    return _streamDeliveryOrdersUseCase(deliveryBoyId);
-  }
+  Stream<List<Order>> streamDeliveryBoyOrders(String deliveryBoyId) =>
+      _deliveryOrderStreams.stream(deliveryBoyId);
 
   static const int _allOrdersLimit = 300;
+  static const int _incomingOffersLimit = 30;
 
   /// Shared admin orders stream. Callers using the default limit fan out from
   /// one underlying listener; a non-default limit falls back to a fresh stream.
@@ -70,55 +72,47 @@ class OrderProvider with ChangeNotifier {
     if (limit != _allOrdersLimit) {
       return _orderRepository.streamAllOrders(limit: limit);
     }
-    return _sharedAllOrders();
+    return _allOrders.stream;
   }
 
-  Stream<List<Order>> _sharedAllOrders() async* {
-    _allOrdersSub ??= _orderRepository
-        .streamAllOrders(limit: _allOrdersLimit)
-        .listen(
-          (orders) {
-            _latestAllOrders = orders;
-            _allOrdersController.add(orders);
-          },
-          onError: (Object error, StackTrace stack) {
-            _allOrdersController.addError(error, stack);
-            // Dead listener (e.g. permission denied after sign-out): drop it
-            // so the next streamAllOrders() call reconnects instead of
-            // handing out a stream that never emits again.
-            _allOrdersSub?.cancel();
-            _allOrdersSub = null;
-            _latestAllOrders = null;
-          },
-        );
-    if (_latestAllOrders != null) yield _latestAllOrders!;
-    yield* _allOrdersController.stream;
+  /// Blinkit-style broadcast feed of pending, unassigned orders any on-duty
+  /// rider can accept (the PII-free /orderOffers copy). The default limit is a
+  /// shared listener.
+  Stream<List<Order>> streamIncomingOffers({int limit = _incomingOffersLimit}) {
+    if (limit != _incomingOffersLimit) return _streamIncomingOffersUseCase(limit: limit);
+    return _incomingOffers.stream;
   }
+
+  /// Retry actions for error states: drop the dead listener and reconnect now.
+  void retryOrder(String orderId) => _orderStreams.reconnect(orderId);
+  void retryCustomerOrders(String customerId) => _customerOrderStreams.reconnect(customerId);
+  void retryDeliveryOrders(String deliveryBoyId) => _deliveryOrderStreams.reconnect(deliveryBoyId);
+  void retryAllOrders() => _allOrders.reconnect();
+  void retryIncomingOffers() => _incomingOffers.reconnect();
+  void retryDeliveryBoys() => _deliveryBoys.reconnect();
 
   /// Drops every cached listener and value tied to the signed-in user. Called
-  /// when the user signs out or a different account signs in: the shared admin
+  /// when the user signs out or a different account signs in: the shared
   /// listeners are killed by Firestore on sign-out, and would otherwise stay
   /// dead (and hold the previous user's orders in memory) for the next login.
   void resetSession() {
-    _allOrdersSub?.cancel();
-    _allOrdersSub = null;
-    _latestAllOrders = null;
+    _orderStreams.reset();
+    _customerOrderStreams.reset();
+    _deliveryOrderStreams.reset();
+    _allOrders.reset();
+    _incomingOffers.reset();
     _deliveryBoys.reset();
   }
 
   @override
   void dispose() {
-    _allOrdersSub?.cancel();
-    _allOrdersController.close();
+    _orderStreams.dispose();
+    _customerOrderStreams.dispose();
+    _deliveryOrderStreams.dispose();
+    _allOrders.dispose();
+    _incomingOffers.dispose();
     _deliveryBoys.dispose();
     super.dispose();
-  }
-
-  /// Blinkit-style broadcast feed of pending, unassigned orders any on-duty
-  /// rider can accept. See streamIncomingOffers on the repository for why
-  /// visibility isn't village-gated.
-  Stream<List<Order>> streamIncomingOffers({int limit = 30}) {
-    return _streamIncomingOffersUseCase(limit: limit);
   }
 
   // Shared listener + stable Stream instance for the default limit, so the

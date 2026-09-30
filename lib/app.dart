@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'core/providers/auth_provider.dart';
+import 'core/providers/banner_provider.dart';
+import 'core/providers/support_provider.dart';
 import 'core/providers/cart_provider.dart';
 import 'core/providers/config_provider.dart';
 import 'core/providers/order_provider.dart';
@@ -80,6 +82,8 @@ class _AuthWrapperState extends State<AuthWrapper> {
       if (hadUser) {
         Provider.of<OrderProvider>(context, listen: false).resetSession();
         Provider.of<ConfigProvider>(context, listen: false).resetSession();
+        Provider.of<SupportProvider>(context, listen: false).resetSession();
+        Provider.of<BannerProvider>(context, listen: false).resetSession();
         // Screens pushed on top of this one (detail pages, checkout, ...)
         // must not survive a forced logout.
         WidgetsBinding.instance.addPostFrameCallback((_) {

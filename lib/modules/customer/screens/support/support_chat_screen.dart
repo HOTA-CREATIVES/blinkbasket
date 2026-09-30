@@ -10,6 +10,7 @@ import '../../../../core/providers/support_provider.dart';
 import '../../../../core/utils/route_generator.dart';
 import '../../../../domain/entities/order.dart';
 import '../../../../domain/entities/support_ticket.dart';
+import '../../../../core/utils/app_exception.dart';
 
 class SupportChatScreen extends StatefulWidget {
   final SupportTicket ticket;
@@ -65,7 +66,7 @@ class _SupportChatScreenState extends State<SupportChatScreen> {
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Failed to select image: $e')),
+          SnackBar(content: Text(userMessageFor(e, fallback: "Couldn't open the photo library."))),
         );
       }
     }
@@ -115,7 +116,7 @@ class _SupportChatScreenState extends State<SupportChatScreen> {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: Text('Failed to send message: $e'),
+          content: Text(userMessageFor(e, fallback: "Couldn't send your message. Please try again.")),
           backgroundColor: AppTokens.statusCancelled,
         ),
       );

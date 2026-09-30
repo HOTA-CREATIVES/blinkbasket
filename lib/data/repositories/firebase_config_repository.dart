@@ -4,6 +4,7 @@ import '../../domain/entities/dashboard_stats.dart';
 import '../../domain/repositories/config_repository.dart';
 import '../models/app_config_dto.dart';
 import '../models/dashboard_stats_dto.dart';
+import '../../core/utils/app_exception.dart';
 
 class FirebaseConfigRepository implements ConfigRepository {
   final FirebaseFirestore _db = FirebaseFirestore.instance;
@@ -46,7 +47,7 @@ class FirebaseConfigRepository implements ConfigRepository {
       );
       await _db.collection('config').doc('app').set(dto.toMap(), SetOptions(merge: true));
     } catch (e) {
-      throw Exception("Failed to update config: $e");
+      throw AppException.from(e, action: 'update config');
     }
   }
 }

@@ -17,6 +17,7 @@ import '../../../core/utils/money.dart';
 import '../../../core/utils/route_generator.dart';
 import '../../../domain/entities/app_config.dart';
 import '../../../domain/entities/order.dart';
+import '../../../core/utils/app_exception.dart';
 
 class OrderTrackingScreen extends StatelessWidget {
   final String orderId;
@@ -75,10 +76,20 @@ class OrderTrackingScreen extends StatelessWidget {
           if (snapshot.connectionState == ConnectionState.waiting && !snapshot.hasData) {
             return const SkeletonList();
           }
-          if (snapshot.hasError || !snapshot.hasData) {
+          final error = snapshot.error;
+          if (error is AppException && error.code == 'not-found') {
             return const EmptyState(
               icon: Icons.receipt_long_outlined,
               title: 'Order not found',
+              message: 'This order no longer exists.',
+            );
+          }
+          if (error != null || !snapshot.hasData) {
+            return EmptyState.error(
+              title: "Couldn't load this order",
+              message: userMessageFor(error),
+              onAction: () => Provider.of<OrderProvider>(context, listen: false)
+                  .retryOrder(orderId),
             );
           }
 

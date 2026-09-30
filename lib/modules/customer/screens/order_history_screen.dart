@@ -13,6 +13,7 @@ import '../../../core/providers/product_provider.dart';
 import '../../../domain/entities/order.dart';
 import '../../../core/utils/reorder_helper.dart';
 import '../../../core/utils/route_generator.dart';
+import '../../../core/utils/app_exception.dart';
 
 class OrderHistoryScreen extends StatelessWidget {
   const OrderHistoryScreen({super.key});
@@ -40,7 +41,11 @@ class OrderHistoryScreen extends StatelessWidget {
                   return const SkeletonList();
                 }
                 if (snapshot.hasError) {
-                  return const EmptyState.error();
+                  return EmptyState.error(
+                    title: "Couldn't load your orders",
+                    message: userMessageFor(snapshot.error),
+                    onAction: () => orderProvider.retryCustomerOrders(user.uid),
+                  );
                 }
                 if (!snapshot.hasData || snapshot.data!.isEmpty) {
                   return EmptyState(
@@ -283,7 +288,7 @@ class _ReorderButtonState extends State<_ReorderButton> {
       setState(() => _isReordering = false);
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: Text('Failed to reorder: $e'),
+          content: Text(userMessageFor(e, fallback: "Couldn't reorder. Please try again.")),
           behavior: SnackBarBehavior.floating,
         ),
       );

@@ -3,6 +3,7 @@ import 'package:provider/provider.dart';
 import '../../../../core/design/app_tokens.dart';
 import '../../../../core/models/user_model.dart';
 import '../../../../core/providers/order_provider.dart';
+import '../../../../core/utils/app_exception.dart';
 
 class EditRiderSheet extends StatefulWidget {
   final UserModel rider;
@@ -119,7 +120,7 @@ class _EditRiderSheetState extends State<EditRiderSheet> {
         Navigator.pop(context);
       }
     } catch (e) {
-      _showSnackBar('Failed to update rider: $e');
+      _showSnackBar(userMessageFor(e, fallback: "Couldn't update the rider. Please try again."));
     } finally {
       if (mounted) {
         setState(() {

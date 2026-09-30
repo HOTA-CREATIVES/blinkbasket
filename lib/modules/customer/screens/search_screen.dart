@@ -9,6 +9,7 @@ import '../../../core/providers/cart_provider.dart';
 import '../../../core/providers/product_provider.dart';
 import '../../../core/utils/route_generator.dart';
 import '../../../domain/entities/product.dart';
+import '../../../core/utils/app_exception.dart';
 
 class SearchScreen extends StatefulWidget {
   const SearchScreen({super.key});
@@ -176,10 +177,10 @@ class _SearchScreenState extends State<SearchScreen> {
           }
 
           if (snapshot.hasError) {
-            return const EmptyState(
-              icon: Icons.error_outline_rounded,
-              title: 'Couldn\'t load products',
-              message: 'Check your connection and try again.',
+            return EmptyState.error(
+              title: "Couldn't load products",
+              message: userMessageFor(snapshot.error),
+              onAction: context.read<ProductProvider>().retryProducts,
             );
           }
 

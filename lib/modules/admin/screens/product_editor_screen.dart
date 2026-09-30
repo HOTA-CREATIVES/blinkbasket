@@ -10,6 +10,7 @@ import '../../../core/services/cloudinary_service.dart';
 import '../../../domain/entities/app_config.dart';
 import '../../../domain/entities/product.dart' as ent;
 import 'widgets/product_ledger_sheet.dart';
+import '../../../core/utils/app_exception.dart';
 
 /// Full-screen product add / edit page (replaces the old cramped bottom sheet).
 ///
@@ -103,7 +104,7 @@ class _ProductEditorScreenState extends State<ProductEditorScreen> {
         _dirty = true;
       });
     } catch (e) {
-      _snack('Could not open the photo library: $e');
+      _snack(userMessageFor(e, fallback: "Couldn't open the photo library."));
     }
   }
 
@@ -196,7 +197,7 @@ class _ProductEditorScreenState extends State<ProductEditorScreen> {
         _snack('Failed to save: ${productProvider.errorMessage ?? 'unknown error'}');
       }
     } catch (e) {
-      _snack('Error: $e');
+      _snack(userMessageFor(e, fallback: "Couldn't save the product. Please try again."));
     } finally {
       if (mounted) setState(() => _isSubmitting = false);
     }

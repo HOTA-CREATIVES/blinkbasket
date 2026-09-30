@@ -9,6 +9,7 @@ import '../../../core/providers/config_provider.dart';
 import '../../../core/services/cloudinary_service.dart';
 import '../../../domain/entities/banner_item.dart';
 import '../../../domain/entities/app_config.dart';
+import '../../../core/utils/app_exception.dart';
 
 class BannerManagementScreen extends StatefulWidget {
   const BannerManagementScreen({super.key});
@@ -330,7 +331,7 @@ class _AddEditBannerSheetState extends State<_AddEditBannerSheet> {
         });
       }
     } catch (e) {
-      _showSnackBar('Error picking image: $e');
+      _showSnackBar(userMessageFor(e, fallback: "Couldn't open the photo library."));
     }
   }
 
@@ -387,7 +388,7 @@ class _AddEditBannerSheetState extends State<_AddEditBannerSheet> {
         _showSnackBar(bannerProvider.errorMessage ?? 'Failed to save banner.');
       }
     } catch (e) {
-      _showSnackBar('Error: $e');
+      _showSnackBar(userMessageFor(e, fallback: "Couldn't save the banner. Please try again."));
     } finally {
       if (mounted) {
         setState(() {

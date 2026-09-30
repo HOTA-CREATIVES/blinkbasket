@@ -137,4 +137,159 @@ void main() {
     shared.dispose();
     await source.close();
   });
+
+  group('idle teardown', () {
+    test('closes the upstream once the last listener has been gone for the grace period', () async {
+      final source = StreamController<int>.broadcast();
+      var upstreamListens = 0;
+      var upstreamCancels = 0;
+      final shared = SharedStream<int>(
+        () {
+          upstreamListens++;
+          return source.stream.asBroadcastStream(onCancel: (_) => upstreamCancels++);
+        },
+        idleGrace: const Duration(milliseconds: 30),
+      );
+
+      final sub = shared.stream.listen((_) {});
+      expect(upstreamListens, 1);
+      await sub.cancel();
+
+      await Future<void>.delayed(const Duration(milliseconds: 80));
+      expect(upstreamCancels, 1, reason: 'no listener for longer than the grace');
+
+      // A later listener starts a fresh upstream.
+      final again = shared.stream.listen((_) {});
+      expect(upstreamListens, 2);
+      await again.cancel();
+      shared.dispose();
+      await source.close();
+    });
+
+    test('a listener that returns within the grace keeps the upstream and the cached value', () async {
+      final source = StreamController<int>.broadcast();
+      var upstreamListens = 0;
+      final shared = SharedStream<int>(
+        () {
+          upstreamListens++;
+          return source.stream;
+        },
+        idleGrace: const Duration(milliseconds: 60),
+      );
+
+      final first = shared.stream.listen((_) {});
+      source.add(7);
+      await Future<void>.delayed(Duration.zero);
+      await first.cancel();
+
+      await Future<void>.delayed(const Duration(milliseconds: 20));
+      final seen = <int>[];
+      final second = shared.stream.listen(seen.add);
+      await Future<void>.delayed(const Duration(milliseconds: 100));
+
+      expect(upstreamListens, 1, reason: 'still within the grace: no new upstream');
+      expect(seen, [7], reason: 'cached value replayed at once');
+      await second.cancel();
+      shared.dispose();
+      await source.close();
+    });
+
+    test('without idleGrace the upstream is kept for the life of the stream (the old behaviour)', () async {
+      final source = StreamController<int>.broadcast();
+      var upstreamListens = 0;
+      final shared = SharedStream<int>(() {
+        upstreamListens++;
+        return source.stream;
+      });
+
+      await (shared.stream.listen((_) {})).cancel();
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+      final again = shared.stream.listen((_) {});
+
+      expect(upstreamListens, 1);
+      await again.cancel();
+      shared.dispose();
+      await source.close();
+    });
+  });
+
+  group('reconnect', () {
+    test('replaces a stale subscription at once when someone is listening', () async {
+      var upstreamListens = 0;
+      final controllers = <StreamController<int>>[];
+      final shared = SharedStream<int>(() {
+        upstreamListens++;
+        final c = StreamController<int>.broadcast();
+        controllers.add(c);
+        return c.stream;
+      });
+      final seen = <int>[];
+      final sub = shared.stream.listen(seen.add);
+      controllers[0].add(1);
+      await Future<void>.delayed(Duration.zero);
+
+      shared.reconnect();
+      expect(upstreamListens, 2);
+      controllers[1].add(2);
+      await Future<void>.delayed(Duration.zero);
+
+      expect(seen, [1, 2]);
+      await sub.cancel();
+      shared.dispose();
+    });
+
+    test('with no listeners it only drops the old subscription; the next listener reconnects', () async {
+      var upstreamListens = 0;
+      final shared = SharedStream<int>(() {
+        upstreamListens++;
+        return const Stream<int>.empty();
+      });
+      shared.reconnect();
+      expect(upstreamListens, 0);
+      final sub = shared.stream.listen((_) {});
+      expect(upstreamListens, 1);
+      await sub.cancel();
+      shared.dispose();
+    });
+  });
+
+  group('KeyedSharedStreams', () {
+    test('hands back the same stream for a key on every call (safe to call from build())', () {
+      final keyed = KeyedSharedStreams<String, int>((k) => const Stream<int>.empty());
+      expect(identical(keyed.stream('a'), keyed.stream('a')), isTrue);
+      expect(identical(keyed.stream('a'), keyed.stream('b')), isFalse);
+      keyed.dispose();
+    });
+
+    test('opens one upstream per key however many listeners join', () async {
+      final opened = <String>[];
+      final keyed = KeyedSharedStreams<String, int>((k) {
+        opened.add(k);
+        return StreamController<int>.broadcast().stream;
+      });
+      final subs = [
+        keyed.stream('order1').listen((_) {}),
+        keyed.stream('order1').listen((_) {}),
+        keyed.stream('order2').listen((_) {}),
+      ];
+      expect(opened, ['order1', 'order2']);
+      for (final s in subs) {
+        await s.cancel();
+      }
+      keyed.dispose();
+    });
+
+    test('reset() forgets every key so the next call opens fresh upstreams', () async {
+      var opens = 0;
+      final keyed = KeyedSharedStreams<String, int>((k) {
+        opens++;
+        return StreamController<int>.broadcast().stream;
+      });
+      await keyed.stream('a').listen((_) {}).cancel();
+      keyed.reset();
+      await keyed.stream('a').listen((_) {}).cancel();
+      expect(opens, 2);
+      keyed.dispose();
+    });
+  });
 }

@@ -22,6 +22,7 @@ import 'order_history_screen.dart';
 import '../../../core/providers/order_provider.dart';
 import '../../../core/utils/route_generator.dart';
 import '../../../domain/entities/order.dart';
+import '../../../core/utils/app_exception.dart';
 
 /// Used when the admin hasn't configured a custom category list yet.
 const List<String> _kDefaultCategories = [
@@ -388,21 +389,6 @@ class _CustomerHomeScreenState extends State<CustomerHomeScreen> {
         StreamBuilder<List<Product>>(
           stream: _productsStream,
           builder: (context, snapshot) {
-            if (snapshot.hasError) {
-              return SliverFillRemaining(
-                child: Center(
-                  child: Padding(
-                    padding: const EdgeInsets.all(24),
-                    child: Text(
-                      'Couldn\'t load products. Check your connection and try again.',
-                      textAlign: TextAlign.center,
-                      style: TextStyle(color: scheme.onSurfaceVariant),
-                    ),
-                  ),
-                ),
-              );
-            }
-
             if (snapshot.connectionState == ConnectionState.waiting && !snapshot.hasData) {
               return const SliverFillRemaining(
                 child: SkeletonProductGrid(),
@@ -412,7 +398,9 @@ class _CustomerHomeScreenState extends State<CustomerHomeScreen> {
             if (snapshot.hasError) {
               return SliverFillRemaining(
                 child: EmptyState.error(
-                  onAction: () => setState(() {}),
+                  title: "Couldn't load products",
+                  message: userMessageFor(snapshot.error),
+                  onAction: context.read<ProductProvider>().retryProducts,
                 ),
               );
             }

@@ -5,11 +5,18 @@ import '../../../core/design/widgets/empty_state.dart';
 import '../../../core/design/widgets/skeleton.dart';
 import '../../../core/providers/product_provider.dart';
 import '../../../domain/entities/inventory_ledger.dart';
+import '../../../core/utils/app_exception.dart';
 
 /// Admin-only screen that lists the last 50 inventory audit log entries
 /// from /inventoryLogs collection in descending timestamp order.
-class InventoryLogsScreen extends StatelessWidget {
+class InventoryLogsScreen extends StatefulWidget {
   const InventoryLogsScreen({super.key});
+
+  @override
+  State<InventoryLogsScreen> createState() => _InventoryLogsScreenState();
+}
+
+class _InventoryLogsScreenState extends State<InventoryLogsScreen> {
 
   IconData _iconForChangeType(String type) {
     switch (type) {
@@ -88,7 +95,12 @@ class InventoryLogsScreen extends StatelessWidget {
             return const SkeletonList();
           }
           if (snap.hasError) {
-            return const EmptyState.error();
+            return EmptyState.error(
+              title: "Couldn't load the audit logs",
+              message: userMessageFor(snap.error),
+              // The log stream is created in build(), so rebuilding retries it.
+              onAction: () => setState(() {}),
+            );
           }
           if (!snap.hasData || snap.data!.isEmpty) {
             return const EmptyState(

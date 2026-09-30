@@ -12,6 +12,7 @@ import '../../../core/utils/route_generator.dart';
 import '../../profile/screens/user_profile_screen.dart';
 import 'rider_map_screen.dart';
 import 'earnings_screen.dart';
+import '../../../core/utils/app_exception.dart';
 
 class DeliveryHomeScreen extends StatefulWidget {
   const DeliveryHomeScreen({super.key});
@@ -213,10 +214,10 @@ class _DeliveryHomeScreenState extends State<DeliveryHomeScreen> {
           return const Scaffold(body: SkeletonList());
         }
         if (snapshot.hasError) {
-          return EmptyState(
-            icon: Icons.error_outline_rounded,
-            title: 'Unable to load tasks',
-            message: snapshot.error.toString(),
+          return EmptyState.error(
+            title: "Couldn't load your tasks",
+            message: userMessageFor(snapshot.error),
+            onAction: () => orderProvider.retryDeliveryOrders(user.uid),
           );
         }
 
@@ -491,7 +492,7 @@ class _DeliveryHomeScreenState extends State<DeliveryHomeScreen> {
                                       setTileState(() => isAccepting = false);
                                       ScaffoldMessenger.of(context).showSnackBar(
                                         SnackBar(
-                                          content: Text('Failed to accept order: $e'),
+                                          content: Text(userMessageFor(e, fallback: "Couldn't accept the order. Please try again.")),
                                           backgroundColor: AppTokens.statusCancelled,
                                         ),
                                       );

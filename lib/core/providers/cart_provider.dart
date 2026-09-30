@@ -5,6 +5,7 @@ import '../../data/repositories/firebase_cart_repository.dart';
 import '../../domain/entities/product.dart';
 import '../../domain/repositories/cart_repository.dart';
 import '../../domain/repositories/product_repository.dart';
+import '../utils/money.dart';
 
 class CartItem {
   final Product product;
@@ -33,6 +34,64 @@ class CartItem {
   }
 }
 
+enum CartChangeKind { priceChanged, quantityReduced, removed }
+
+/// One difference between the cart the customer built and what the shop offers
+/// now — a price that moved, stock that ran down, or an item that is gone.
+class CartChange {
+  final CartChangeKind kind;
+  final String productName;
+  final double? oldPrice;
+  final double? newPrice;
+  final int? newQuantity;
+
+  const CartChange.priceChanged({
+    required this.productName,
+    required double this.oldPrice,
+    required double this.newPrice,
+  })  : kind = CartChangeKind.priceChanged,
+        newQuantity = null;
+
+  const CartChange.quantityReduced({
+    required this.productName,
+    required int this.newQuantity,
+  })  : kind = CartChangeKind.quantityReduced,
+        oldPrice = null,
+        newPrice = null;
+
+  const CartChange.removed({required this.productName})
+      : kind = CartChangeKind.removed,
+        oldPrice = null,
+        newPrice = null,
+        newQuantity = null;
+
+  /// One line for the customer.
+  String get message {
+    switch (kind) {
+      case CartChangeKind.priceChanged:
+        return '$productName: price changed from ${formatRupees(oldPrice!)} to ${formatRupees(newPrice!)}';
+      case CartChangeKind.quantityReduced:
+        return '$productName: only $newQuantity available, quantity reduced';
+      case CartChangeKind.removed:
+        return '$productName: no longer available, removed from your cart';
+    }
+  }
+}
+
+/// Result of checking the cart against the live catalogue.
+class CartValidation {
+  /// What changed (already applied to the cart).
+  final List<CartChange> changes;
+
+  /// True when at least one product could not be looked up (offline, error).
+  /// Nothing was removed for those; the server re-checks at order time.
+  final bool couldNotVerify;
+
+  const CartValidation({this.changes = const [], this.couldNotVerify = false});
+
+  bool get isClean => changes.isEmpty;
+}
+
 /// Cart persisted to Firestore only. Firestore offline persistence (enabled
 /// in main.dart) handles offline reads/writes — the local cache is managed
 /// by the SDK, not SharedPreferences. This eliminates the dual-source
@@ -59,6 +118,22 @@ class CartProvider with ChangeNotifier {
 
   Map<String, CartItem> get items => {..._items};
 
+  final List<CartChange> _pendingChanges = [];
+  bool _isValidating = false;
+
+  /// Changes found while loading the cart, waiting for the customer to see
+  /// them (the cart screen shows and then dismisses them).
+  List<CartChange> get pendingChanges => List.unmodifiable(_pendingChanges);
+
+  void dismissPendingChanges() {
+    if (_pendingChanges.isEmpty) return;
+    _pendingChanges.clear();
+    notifyListeners();
+  }
+
+  /// True while [revalidate] is talking to the server.
+  bool get isValidating => _isValidating;
+
   int quantityOf(String productId) => _items[productId]?.quantity ?? 0;
 
   int get itemCount => _items.values.fold(0, (acc, item) => acc + item.quantity);
@@ -77,6 +152,7 @@ class CartProvider with ChangeNotifier {
   Future<void> setUser(String? userId) async {
     if (userId == null && _items.isNotEmpty) {
       _items.clear();
+      _pendingChanges.clear();
       _isLoaded = false;
       _currentUserId = null;
       notifyListeners();
@@ -104,34 +180,92 @@ class CartProvider with ChangeNotifier {
           }
         });
       }
-      // Prune out-of-stock products. Fetched in parallel — a large cart
-      // otherwise pays one round trip per item, sequentially.
-      if (_productRepository != null && _items.isNotEmpty) {
-        final repo = _productRepository;
-        final entries = _items.entries.toList();
-        final products = await Future.wait(
-          entries.map((e) => repo.getProductById(e.key)),
-        );
-        final toRemove = <String>[];
-        for (var i = 0; i < entries.length; i++) {
-          final product = products[i];
-          if (product == null || product.isOutOfStock) {
-            toRemove.add(entries[i].key);
-          } else if (entries[i].value.quantity > product.sellableStock) {
-            entries[i].value.quantity = product.sellableStock;
-          }
-        }
-        if (toRemove.isNotEmpty) {
-          for (final id in toRemove) {
-            _items.remove(id);
-          }
-          await _saveCart();
-        }
+      // Refresh prices/stock from the live catalogue and prune what is gone.
+      // Anything that changed is kept for the cart screen to tell the customer.
+      final result = await _applyLiveProducts();
+      if (result.changes.isNotEmpty) {
+        _pendingChanges
+          ..clear()
+          ..addAll(result.changes);
       }
     } catch (e) {
       debugPrint('Error loading cart from Firestore: $e');
     } finally {
       _isLoaded = true;
+      notifyListeners();
+    }
+  }
+
+  /// Compares every cart line with the live product: refreshes the stored
+  /// price/stock snapshot, lowers quantities to what is available, and removes
+  /// products that are gone or switched off. Persists if anything changed.
+  Future<CartValidation> _applyLiveProducts() async {
+    final repo = _productRepository;
+    if (repo == null || _items.isEmpty) return const CartValidation();
+
+    final entries = _items.entries.toList();
+    var couldNotVerify = false;
+    final live = await Future.wait(entries.map((e) async {
+      try {
+        return (ok: true, product: await repo.getProductById(e.key));
+      } catch (_) {
+        couldNotVerify = true;
+        return (ok: false, product: null as Product?);
+      }
+    }));
+
+    final changes = <CartChange>[];
+    var mutated = false;
+    for (var i = 0; i < entries.length; i++) {
+      final id = entries[i].key;
+      final line = entries[i].value;
+      final fetched = live[i];
+      if (!fetched.ok) continue; // can't tell: leave the line as it is
+      final fresh = fetched.product;
+
+      if (fresh == null || fresh.isOutOfStock) {
+        changes.add(CartChange.removed(productName: line.product.name));
+        _items.remove(id);
+        mutated = true;
+        continue;
+      }
+      final oldPrice = line.product.effectivePrice;
+      var quantity = line.quantity;
+      if (quantity > fresh.sellableStock) {
+        quantity = fresh.sellableStock;
+        changes.add(CartChange.quantityReduced(
+            productName: fresh.name, newQuantity: quantity));
+      }
+      if (fresh.effectivePrice != oldPrice) {
+        changes.add(CartChange.priceChanged(
+          productName: fresh.name,
+          oldPrice: oldPrice,
+          newPrice: fresh.effectivePrice,
+        ));
+      }
+      // Always store the fresh snapshot so totals use today's price and stock.
+      _items[id] = CartItem(product: fresh, quantity: quantity);
+      if (quantity != line.quantity || fresh.effectivePrice != oldPrice) mutated = true;
+    }
+
+    if (mutated) await _saveCart();
+    return CartValidation(changes: changes, couldNotVerify: couldNotVerify);
+  }
+
+  /// Checks the cart against the live catalogue right now (before checkout or
+  /// placing an order) so the customer sees today's prices and availability,
+  /// and is told what changed. Prices are re-checked by the server at order
+  /// time regardless; this makes that check unsurprising.
+  Future<CartValidation> revalidate() async {
+    if (_isValidating) return const CartValidation();
+    _isValidating = true;
+    notifyListeners();
+    try {
+      final result = await _applyLiveProducts();
+      _pendingChanges.clear();
+      return result;
+    } finally {
+      _isValidating = false;
       notifyListeners();
     }
   }

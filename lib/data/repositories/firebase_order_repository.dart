@@ -5,6 +5,7 @@ import '../../domain/entities/order.dart';
 import '../../domain/repositories/order_repository.dart';
 import '../../core/models/user_model.dart';
 import '../models/order_dto.dart';
+import '../../core/utils/app_exception.dart';
 
 class FirebaseOrderRepository implements OrderRepository {
   final FirebaseFirestore _db = FirebaseFirestore.instance;
@@ -16,7 +17,7 @@ class FirebaseOrderRepository implements OrderRepository {
   Stream<Order> streamOrder(String orderId) {
     return _db.collection('orders').doc(orderId).snapshots().map((snapshot) {
       if (!snapshot.exists) {
-        throw Exception("Order not found: $orderId");
+        throw const AppException('Order not found.', code: 'not-found');
       }
       return OrderDto.fromMap(snapshot.data() ?? {}, snapshot.id);
     });
@@ -188,7 +189,7 @@ class FirebaseOrderRepository implements OrderRepository {
         'updatedAt': FieldValue.serverTimestamp(),
       });
     } catch (e) {
-      throw Exception("Failed to update order status: $e");
+      throw AppException.from(e, action: 'update order status');
     }
   }
 
@@ -202,7 +203,7 @@ class FirebaseOrderRepository implements OrderRepository {
         'updatedAt': FieldValue.serverTimestamp(),
       });
     } catch (e) {
-      throw Exception("Failed to submit order rating: $e");
+      throw AppException.from(e, action: 'submit order rating');
     }
   }
 
@@ -320,7 +321,7 @@ class FirebaseOrderRepository implements OrderRepository {
         'isActive': isActive,
       }, SetOptions(merge: true));
     } catch (e) {
-      throw Exception("Failed to update rider active status: $e");
+      throw AppException.from(e, action: 'update rider active status');
     }
   }
 
@@ -333,7 +334,7 @@ class FirebaseOrderRepository implements OrderRepository {
         'onDuty': onDuty,
       }, SetOptions(merge: true));
     } catch (e) {
-      throw Exception("Failed to update rider duty status: $e");
+      throw AppException.from(e, action: 'update rider duty status');
     }
   }
 
@@ -353,7 +354,7 @@ class FirebaseOrderRepository implements OrderRepository {
       });
       return result.data['temporaryPassword'] as String;
     } catch (e) {
-      throw Exception("Failed to whitelist rider login: $e");
+      throw AppException.from(e, action: 'whitelist rider login');
     }
   }
 
@@ -378,7 +379,7 @@ class FirebaseOrderRepository implements OrderRepository {
         'updatedAt': FieldValue.serverTimestamp(),
       }, SetOptions(merge: true));
     } catch (e) {
-      throw Exception("Failed to update rider details: $e");
+      throw AppException.from(e, action: 'update rider details');
     }
   }
 
@@ -391,7 +392,7 @@ class FirebaseOrderRepository implements OrderRepository {
         'deletedAt': FieldValue.serverTimestamp(),
       }, SetOptions(merge: true));
     } catch (e) {
-      throw Exception("Failed to delete rider: $e");
+      throw AppException.from(e, action: 'delete rider');
     }
   }
 }
