@@ -24,7 +24,7 @@ Every env var, dart-define, secret, and config source — and how they layer.
 | `GEOCODER_BASE_URL` | `https://nominatim.openstreetmap.org` | Nominatim-compatible API used by `reverseGeocode` / `searchAddress`. Point it at a paid provider for production scale — the public instance's usage policy does not allow heavy commercial use. |
 | `GEOCODER_CONTACT_EMAIL` | `support@jcmart.app` | Sent in the `User-Agent` so the geocoder can contact the operator. Set a real, monitored address. |
 
-Results are cached in `/geocodeCache` (30 days); set a Firestore TTL policy if you want old entries reaped. Rate-limit counters live in `/rateLimits` — set a TTL policy on `expireAt`.
+Results are cached in `/geocodeCache` (30 days); entries carry an `expireAt` field. Rate-limit counters live in `/rateLimits` and rider-declined offers in `deliveryBoys/{uid}/rejectedOffers`, also with `expireAt`. `firestore.indexes.json` declares TTL `fieldOverrides` for all three, so `firebase deploy --only firestore:indexes` enables the policies.
 
 ### Admin config flags (`/config/app`)
 | Field | Default | Effect |

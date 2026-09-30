@@ -1248,6 +1248,43 @@ export const acceptOrder = onCall({ region: REGION, enforceAppCheck: process.env
 });
 
 /**
+ * A rider declines an offer. Persisted (deliveryBoys/{uid}/rejectedOffers) so
+ * the offer stays hidden for that rider across restarts and re-broadcasts,
+ * while remaining available to every other rider. Purely a per-rider hide: it
+ * never touches the order, so it can't affect who else may accept it.
+ */
+export const rejectOrderOffer = onCall({ region: REGION, enforceAppCheck: process.env.FUNCTIONS_EMULATOR !== "true" }, async (request) => {
+  const uid = request.auth?.uid;
+  if (!uid) {
+    throw new HttpsError("unauthenticated", "Sign in first.");
+  }
+  await checkRateLimit(uid, "rejectOrderOffer");
+  if (request.auth?.token?.delivery !== true) {
+    throw new HttpsError("permission-denied", "Only delivery partners can reject offers.");
+  }
+  const orderId = String(request.data?.orderId ?? "");
+  if (!orderId || orderId.includes("/")) {
+    throw new HttpsError("invalid-argument", "orderId is required.");
+  }
+  const riderSnap = await db.collection("deliveryBoys").doc(uid).get();
+  if (!riderSnap.exists || riderSnap.data()?.isActive === false) {
+    throw new HttpsError("permission-denied", "Your account is deactivated. Contact support.");
+  }
+  // Only real, still-open offers can be rejected, so the subcollection can't
+  // be padded with arbitrary ids.
+  const offer = await db.collection("orderOffers").doc(orderId).get();
+  if (!offer.exists) {
+    return { success: true };
+  }
+  await db.collection("deliveryBoys").doc(uid).collection("rejectedOffers").doc(orderId).set({
+    rejectedAt: Timestamp.now(),
+    // Lets a scheduled cleanup (or a TTL policy) drop entries once the offer is long gone.
+    expireAt: Timestamp.fromMillis(Date.now() + 7 * 24 * 60 * 60 * 1000),
+  });
+  return { success: true };
+});
+
+/**
  * Moves the rider's own order one step forward (assigned → picked_up →
  * out_for_delivery) and records when and — if the app could get a fix — where.
  * This is the only path for those transitions (the rules no longer let a rider
@@ -1874,7 +1911,12 @@ function writeGeocodeCache(key: string, value: unknown): Promise<unknown> {
   return db
     .collection("geocodeCache")
     .doc(key)
-    .set({ value, fetchedAt: Timestamp.now() })
+    .set({
+      value,
+      fetchedAt: Timestamp.now(),
+      // TTL policy field (firestore.indexes.json): stale entries are dropped by Firestore.
+      expireAt: Timestamp.fromMillis(Date.now() + 60 * 24 * 60 * 60 * 1000),
+    })
     .catch((e) => console.error("[GEOCODE_CACHE_WRITE_FAILED]", e));
 }
 

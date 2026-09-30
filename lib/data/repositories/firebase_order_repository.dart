@@ -288,6 +288,32 @@ class FirebaseOrderRepository implements OrderRepository {
   }
 
   @override
+  Future<String?> rejectOrderOffer(String orderId) async {
+    try {
+      await _functions
+          .httpsCallable('rejectOrderOffer')
+          .call<dynamic>({'orderId': orderId}).timeout(const Duration(seconds: 20));
+      return null;
+    } on TimeoutException {
+      return 'Request timed out. Check your connection and try again.';
+    } on FirebaseFunctionsException catch (e) {
+      return e.message ?? 'Could not reject the offer.';
+    } catch (_) {
+      return 'Could not reject the offer. Check your connection and try again.';
+    }
+  }
+
+  @override
+  Stream<Set<String>> streamRejectedOfferIds(String riderId) {
+    return _db
+        .collection('deliveryBoys')
+        .doc(riderId)
+        .collection('rejectedOffers')
+        .snapshots()
+        .map((snapshot) => {for (final doc in snapshot.docs) doc.id});
+  }
+
+  @override
   Future<String?> reportDeliveryFailure(String orderId, String reason) async {
     try {
       final callable = _functions.httpsCallable('reportDeliveryFailure');

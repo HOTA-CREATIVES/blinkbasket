@@ -11,6 +11,7 @@ import '../../domain/usecases/stream_delivery_orders_usecase.dart';
 import '../../domain/usecases/advance_order_status_usecase.dart';
 import '../../domain/usecases/stream_incoming_offers_usecase.dart';
 import '../../domain/usecases/accept_order_usecase.dart';
+import '../../domain/usecases/reject_order_offer_usecase.dart';
 import '../../data/repositories/firebase_order_repository.dart';
 import '../models/user_model.dart';
 import '../utils/app_exception.dart';
@@ -26,6 +27,7 @@ class OrderProvider with ChangeNotifier {
   late final AdvanceOrderStatusUseCase _advanceOrderStatusUseCase;
   late final StreamIncomingOffersUseCase _streamIncomingOffersUseCase;
   late final AcceptOrderUseCase _acceptOrderUseCase;
+  late final RejectOrderOfferUseCase _rejectOrderOfferUseCase;
 
   bool _isLoading = false;
   String? _errorMessage;
@@ -40,6 +42,8 @@ class OrderProvider with ChangeNotifier {
       KeyedSharedStreams((id) => _orderRepository.streamOrder(id));
   late final KeyedSharedStreams<String, List<Order>> _customerOrderStreams =
       KeyedSharedStreams((uid) => _streamCustomerOrdersUseCase(uid));
+  late final KeyedSharedStreams<String, Set<String>> _rejectedOfferStreams =
+      KeyedSharedStreams((uid) => _orderRepository.streamRejectedOfferIds(uid));
   late final KeyedSharedStreams<String, List<Order>> _deliveryOrderStreams =
       KeyedSharedStreams((uid) => _streamDeliveryOrdersUseCase(uid));
   late final SharedStream<List<Order>> _allOrders =
@@ -56,6 +60,7 @@ class OrderProvider with ChangeNotifier {
     _advanceOrderStatusUseCase = AdvanceOrderStatusUseCase(_orderRepository);
     _streamIncomingOffersUseCase = StreamIncomingOffersUseCase(_orderRepository);
     _acceptOrderUseCase = AcceptOrderUseCase(_orderRepository);
+    _rejectOrderOfferUseCase = RejectOrderOfferUseCase(_orderRepository);
   }
   // Streams
   Stream<Order> streamOrder(String orderId) => _orderStreams.stream(orderId);
@@ -102,6 +107,7 @@ class OrderProvider with ChangeNotifier {
     _orderStreams.reset();
     _customerOrderStreams.reset();
     _deliveryOrderStreams.reset();
+    _rejectedOfferStreams.reset();
     _allOrders.reset();
     _incomingOffers.reset();
     _deliveryBoys.reset();
@@ -112,6 +118,7 @@ class OrderProvider with ChangeNotifier {
     _orderStreams.dispose();
     _customerOrderStreams.dispose();
     _deliveryOrderStreams.dispose();
+    _rejectedOfferStreams.dispose();
     _allOrders.dispose();
     _incomingOffers.dispose();
     _deliveryBoys.dispose();
@@ -218,6 +225,13 @@ class OrderProvider with ChangeNotifier {
   /// Returns null on success, or a user-readable error (e.g. another rider
   /// already took it).
   Future<String?> acceptOrder(String orderId) => _acceptOrderUseCase(orderId);
+
+  /// Rider declines an offer; persisted so it stays hidden for that rider.
+  Future<String?> rejectOrderOffer(String orderId) => _rejectOrderOfferUseCase(orderId);
+
+  /// Ids of the offers [riderId] has declined.
+  Stream<Set<String>> streamRejectedOfferIds(String riderId) =>
+      _rejectedOfferStreams.stream(riderId);
 
   /// Rider reports an assigned/picked-up/out-for-delivery order as
   /// undeliverable (customer unreachable, refused COD, bad address). Returns

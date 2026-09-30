@@ -103,6 +103,13 @@ abstract class OrderRepository {
   /// another rider already accepted it first).
   Future<String?> acceptOrder(String orderId);
 
+  /// Rider declines an offer. Persisted server-side (per rider) so it stays
+  /// hidden across restarts. Returns null on success or a readable error.
+  Future<String?> rejectOrderOffer(String orderId);
+
+  /// Ids of the offers this rider has declined.
+  Stream<Set<String>> streamRejectedOfferIds(String riderId);
+
   /// Rider reports that an assigned/picked-up/out-for-delivery order could
   /// not be handed over (customer unreachable, refused COD, bad address).
   /// The only way to get such an order out of an in-progress state — there

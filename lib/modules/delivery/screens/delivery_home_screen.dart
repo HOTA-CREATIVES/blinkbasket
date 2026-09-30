@@ -25,9 +25,9 @@ class DeliveryHomeScreen extends StatefulWidget {
 class _DeliveryHomeScreenState extends State<DeliveryHomeScreen> {
   int _currentIndex = 0;
 
-  // Blinkit-style "Reject" is a pure local dismiss — no backend call, no
-  // persisted state. An offer reappearing here on the next broadcast retry
-  // (see escalateStaleOrders) is correct behavior, not a bug.
+  // "Reject" hides the offer at once (this set) and is also saved for the
+  // rider (rejectOrderOffer), so it stays hidden after a restart or a
+  // re-broadcast (see escalateStaleOrders). Other riders still see it.
   final Set<String> _dismissedOfferIds = {};
 
   @override
@@ -269,13 +269,16 @@ class _DeliveryHomeScreenState extends State<DeliveryHomeScreen> {
       OrderProvider orderProvider, ColorScheme scheme) {
     if (!user.onDuty) return const SizedBox.shrink();
 
-    return StreamBuilder<List<Order>>(
+    return StreamBuilder<Set<String>>(
+      stream: orderProvider.streamRejectedOfferIds(user.uid),
+      builder: (context, rejectedSnapshot) => StreamBuilder<List<Order>>(
       stream: orderProvider.streamIncomingOffers(),
       builder: (context, snapshot) {
         if (snapshot.hasError) return const SizedBox.shrink();
+        final rejected = rejectedSnapshot.data ?? const <String>{};
 
         final offers = (snapshot.data ?? [])
-            .where((o) => !_dismissedOfferIds.contains(o.id))
+            .where((o) => !_dismissedOfferIds.contains(o.id) && !rejected.contains(o.id))
             .toList()
           ..sort((a, b) {
             final aLocal =
@@ -345,6 +348,7 @@ class _DeliveryHomeScreenState extends State<DeliveryHomeScreen> {
           ),
         );
       },
+      ),
     );
   }
 
@@ -453,7 +457,12 @@ class _DeliveryHomeScreenState extends State<DeliveryHomeScreen> {
                             tooltip: 'Reject offer',
                             onPressed: isAccepting
                                 ? null
-                                : () => setState(() => _dismissedOfferIds.add(order.id)),
+                                : () {
+                                setState(() => _dismissedOfferIds.add(order.id));
+                                // Best effort: if saving fails the offer just
+                                // comes back next launch.
+                                orderProvider.rejectOrderOffer(order.id);
+                              },
                             icon: Icon(Icons.close_rounded, size: 18, color: scheme.onSurfaceVariant),
                             style: IconButton.styleFrom(
                               backgroundColor: scheme.surfaceContainerHighest,

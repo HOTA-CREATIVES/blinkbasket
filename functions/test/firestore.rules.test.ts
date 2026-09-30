@@ -745,3 +745,19 @@ describe("firestore.rules — users self-update", () => {
     await assertFails(updateDoc(doc(asCustomer, "users/cust1"), { role: "admin" }));
   });
 });
+
+describe("firestore.rules — rejected offers", () => {
+  it("lets a rider read but never write their own rejections", async () => {
+    await testEnv.withSecurityRulesDisabled(async (ctx) => {
+      await setDoc(doc(ctx.firestore(), "deliveryBoys/rider1/rejectedOffers/order1"), { rejectedAt: 1 });
+    });
+    const asRider = testEnv.authenticatedContext("rider1", { delivery: true }).firestore();
+    await assertSucceeds(getDoc(doc(asRider, "deliveryBoys/rider1/rejectedOffers/order1")));
+    await assertFails(setDoc(doc(asRider, "deliveryBoys/rider1/rejectedOffers/order2"), { rejectedAt: 1 }));
+  });
+
+  it("hides one rider's rejections from another", async () => {
+    const other = testEnv.authenticatedContext("rider2", { delivery: true }).firestore();
+    await assertFails(getDoc(doc(other, "deliveryBoys/rider1/rejectedOffers/order1")));
+  });
+});
