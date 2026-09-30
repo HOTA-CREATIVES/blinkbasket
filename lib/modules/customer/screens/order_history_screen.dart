@@ -14,9 +14,15 @@ import '../../../domain/entities/order.dart';
 import '../../../core/utils/reorder_helper.dart';
 import '../../../core/utils/route_generator.dart';
 import '../../../core/utils/app_exception.dart';
+import '../../../core/utils/date_format.dart';
+import '../../../core/utils/money.dart';
 
 class OrderHistoryScreen extends StatelessWidget {
-  const OrderHistoryScreen({super.key});
+  /// What "Browse Products" does from the empty state. Inside the home tabs it
+  /// switches to the Store tab; as a pushed route it defaults to going back.
+  final VoidCallback? onBrowse;
+
+  const OrderHistoryScreen({super.key, this.onBrowse});
 
   @override
   Widget build(BuildContext context) {
@@ -53,21 +59,41 @@ class OrderHistoryScreen extends StatelessWidget {
                     title: 'No orders yet',
                     message: 'Start shopping to see your orders here.',
                     actionLabel: 'Browse Products',
-                    onAction: () => Navigator.of(context).popUntil((r) => r.isFirst),
+                    onAction: onBrowse ?? () => Navigator.of(context).popUntil((r) => r.isFirst),
                   );
                 }
 
-                final orders = snapshot.data!;
+                // Orders in progress first (they need attention: a code to give,
+                // a rider to follow), then the rest, newest first within each.
+                bool inProgress(Order o) =>
+                    o.status != 'delivered' && o.status != 'cancelled';
+                final active = snapshot.data!.where(inProgress).toList();
+                final past = snapshot.data!.where((o) => !inProgress(o)).toList();
+                final rows = <Object>[
+                  if (active.isNotEmpty) 'In progress',
+                  ...active,
+                  if (active.isNotEmpty && past.isNotEmpty) 'Past orders',
+                  ...past,
+                ];
 
                 return ListView.separated(
                   padding: const EdgeInsets.all(AppTokens.s16),
-                  itemCount: orders.length,
+                  itemCount: rows.length,
                   separatorBuilder: (_, __) =>
                       const SizedBox(height: AppTokens.s12),
                   itemBuilder: (context, index) {
-                    final order = orders[index];
-                    final isActive = order.status != 'delivered' &&
-                        order.status != 'cancelled';
+                    final row = rows[index];
+                    if (row is String) {
+                      return Text(
+                        row,
+                        style: Theme.of(context).textTheme.titleSmall?.copyWith(
+                              fontWeight: FontWeight.w800,
+                              color: scheme.onSurfaceVariant,
+                            ),
+                      );
+                    }
+                    final order = row as Order;
+                    final isActive = inProgress(order);
 
                     return Card(
                       clipBehavior: Clip.antiAlias,
@@ -99,13 +125,13 @@ class OrderHistoryScreen extends StatelessWidget {
                               ),
                               const SizedBox(height: AppTokens.s8),
                               Text(
-                                '${order.items.length} item(s) • ₹${order.totalAmount.toStringAsFixed(2)}',
+                                '${order.items.length} ${order.items.length == 1 ? 'item' : 'items'} • ${formatRupees(order.totalAmount)}',
                                 style: const TextStyle(
                                     fontWeight: FontWeight.w600),
                               ),
                               const SizedBox(height: 2),
                               Text(
-                                'Placed on ${order.createdAt.day}/${order.createdAt.month}/${order.createdAt.year} at ${order.createdAt.hour}:${order.createdAt.minute.toString().padLeft(2, '0')}',
+                                'Placed ${formatDateTime(order.createdAt)}',
                                 style: TextStyle(
                                     color: scheme.onSurfaceVariant,
                                     fontSize: 12),

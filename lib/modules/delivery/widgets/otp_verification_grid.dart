@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
@@ -38,8 +39,10 @@ class _OtpVerificationGridState extends State<OtpVerificationGrid>
   late List<FocusNode> _focusNodes;
   // One key-listener node per box, created once (a fresh FocusNode in build()
   // leaked a node on every rebuild).
-  late final List<FocusNode> _keyNodes =
-      List.generate(4, (_) => FocusNode(skipTraversal: true));
+  late final List<FocusNode> _keyNodes = List.generate(
+    4,
+    (_) => FocusNode(skipTraversal: true),
+  );
   bool _isVerifying = false;
   bool _cashConfirmed = false;
 
@@ -63,9 +66,10 @@ class _OtpVerificationGridState extends State<OtpVerificationGrid>
       duration: const Duration(milliseconds: 500),
     );
 
-    _shakeAnimation = Tween<double>(begin: 0.0, end: 24.0)
-        .chain(CurveTween(curve: Curves.elasticIn))
-        .animate(_shakeController);
+    _shakeAnimation = Tween<double>(
+      begin: 0.0,
+      end: 24.0,
+    ).chain(CurveTween(curve: Curves.elasticIn)).animate(_shakeController);
 
     // Auto focus first field
     WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -104,7 +108,8 @@ class _OtpVerificationGridState extends State<OtpVerificationGrid>
     if (_isVerifying) return;
     if (!_cashConfirmed) {
       setState(() {
-        _serverError = 'Confirm you collected ${formatRupees(widget.amountDue)} first';
+        _serverError =
+            'Confirm you collected ${formatRupees(widget.amountDue)} first';
       });
       HapticFeedback.mediumImpact();
       return;
@@ -169,6 +174,24 @@ class _OtpVerificationGridState extends State<OtpVerificationGrid>
     }
   }
 
+  /// Puts pasted [digits] into the boxes from [start] on, then either submits
+  /// (all four filled) or moves on to the next empty box.
+  void _spread(int start, String digits) {
+    var box = start;
+    for (final digit in digits.split('')) {
+      if (box > 3) break;
+      _controllers[box].text = digit;
+      box++;
+    }
+    setState(() => _serverError = null);
+    if (_controllers.every((c) => c.text.isNotEmpty)) {
+      _focusNodes[3].requestFocus();
+      _verifyOtp();
+    } else {
+      _focusNodes[box.clamp(0, 3)].requestFocus();
+    }
+  }
+
   void _onDigitInput(int index, String val) {
     if (_serverError != null) {
       setState(() {
@@ -187,7 +210,8 @@ class _OtpVerificationGridState extends State<OtpVerificationGrid>
   }
 
   void _onDigitDelete(int index, KeyEvent event) {
-    if (event is KeyDownEvent && event.logicalKey == LogicalKeyboardKey.backspace) {
+    if (event is KeyDownEvent &&
+        event.logicalKey == LogicalKeyboardKey.backspace) {
       if (_controllers[index].text.isEmpty && index > 0) {
         _controllers[index - 1].clear();
         _focusNodes[index - 1].requestFocus();
@@ -207,138 +231,173 @@ class _OtpVerificationGridState extends State<OtpVerificationGrid>
         children: [
           Icon(Icons.verified_user_outlined, color: scheme.primary),
           const SizedBox(width: 8),
-          Text('Verify Delivery', style: Theme.of(context).textTheme.titleLarge),
+          Expanded(
+            child: Text(
+              'Verify Delivery',
+              style: Theme.of(context).textTheme.titleLarge,
+            ),
+          ),
         ],
       ),
-      content: Column(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          Text(
-            'Ask the customer for the 4-digit verification code shown in their app.',
-            style: Theme.of(context)
-                .textTheme
-                .bodySmall
-                ?.copyWith(color: scheme.onSurfaceVariant, height: 1.4),
-          ),
-          const SizedBox(height: AppTokens.s12),
-          Container(
-            padding: const EdgeInsets.all(AppTokens.s12),
-            decoration: BoxDecoration(
-              color: scheme.primaryContainer.withValues(alpha: 0.5),
-              borderRadius: BorderRadius.circular(AppTokens.rMd),
+      content: SingleChildScrollView(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Text(
+              'Ask the customer for the 4-digit verification code shown in their app.',
+              style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                color: scheme.onSurfaceVariant,
+                height: 1.4,
+              ),
             ),
-            child: Row(
-              children: [
-                Icon(Icons.payments_outlined, color: scheme.primary),
-                const SizedBox(width: AppTokens.s8),
-                Expanded(
-                  child: Text(
-                    'Collect ${formatRupees(widget.amountDue)} in cash',
-                    style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 15),
-                  ),
-                ),
-              ],
-            ),
-          ),
-          CheckboxListTile(
-            contentPadding: EdgeInsets.zero,
-            controlAffinity: ListTileControlAffinity.leading,
-            dense: true,
-            value: _cashConfirmed,
-            onChanged: _isVerifying
-                ? null
-                : (v) => setState(() {
-                      _cashConfirmed = v ?? false;
-                      if (_cashConfirmed) _serverError = null;
-                    }),
-            title: Text('I have collected ${formatRupees(widget.amountDue)}'),
-          ),
-          const SizedBox(height: AppTokens.s8),
-          AnimatedBuilder(
-            animation: _shakeAnimation,
-            builder: (context, child) {
-              final double dx = _shakeAnimation.value;
-              // Simple shake offset calculation
-              final double offset = dx == 0
-                  ? 0
-                  : (dx * (1.0 - (dx / 24.0).clamp(0.0, 1.0)) * 
-                      ((dx * 4).floor() % 2 == 0 ? 1 : -1));
-              return Transform.translate(
-                offset: Offset(offset, 0),
-                child: child,
-              );
-            },
-            child: Row(
-              mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-              children: List.generate(4, (index) {
-                return SizedBox(
-                  width: 56,
-                  height: 56,
-                  child: KeyboardListener(
-                    focusNode: _keyNodes[index], // dedicated listener node
-                    onKeyEvent: (event) => _onDigitDelete(index, event),
-                    child: TextFormField(
-                      controller: _controllers[index],
-                      focusNode: _focusNodes[index],
-                      keyboardType: TextInputType.number,
-                      textAlign: TextAlign.center,
-                      maxLength: 1,
-                      style: TextStyle(
-                        fontSize: 22,
-                        fontWeight: FontWeight.bold,
-                        color: _serverError != null ? scheme.error : scheme.onSurface,
+            const SizedBox(height: AppTokens.s12),
+            Container(
+              padding: const EdgeInsets.all(AppTokens.s12),
+              decoration: BoxDecoration(
+                color: scheme.primaryContainer.withValues(alpha: 0.5),
+                borderRadius: BorderRadius.circular(AppTokens.rMd),
+              ),
+              child: Row(
+                children: [
+                  Icon(Icons.payments_outlined, color: scheme.primary),
+                  const SizedBox(width: AppTokens.s8),
+                  Expanded(
+                    child: Text(
+                      'Collect ${formatRupees(widget.amountDue)} in cash',
+                      style: const TextStyle(
+                        fontWeight: FontWeight.w800,
+                        fontSize: 15,
                       ),
-                      inputFormatters: [
-                        FilteringTextInputFormatter.digitsOnly,
-                      ],
-                      decoration: InputDecoration(
-                        counterText: '',
-                        filled: true,
-                        fillColor: scheme.surfaceContainerHighest.withValues(alpha: 0.4),
-                        contentPadding: EdgeInsets.zero,
-                        enabledBorder: OutlineInputBorder(
-                          borderRadius: BorderRadius.circular(AppTokens.rMd),
-                          borderSide: BorderSide(
-                            color: _serverError != null
-                                ? scheme.error.withValues(alpha: 0.5)
-                                : scheme.outlineVariant,
-                          ),
-                        ),
-                        focusedBorder: OutlineInputBorder(
-                          borderRadius: BorderRadius.circular(AppTokens.rMd),
-                          borderSide: BorderSide(
-                            color: _serverError != null ? scheme.error : scheme.primary,
-                            width: 2.0,
-                          ),
-                        ),
-                      ),
-                      onChanged: (val) => _onDigitInput(index, val),
                     ),
                   ),
+                ],
+              ),
+            ),
+            CheckboxListTile(
+              contentPadding: EdgeInsets.zero,
+              controlAffinity: ListTileControlAffinity.leading,
+              dense: true,
+              value: _cashConfirmed,
+              onChanged:
+                  _isVerifying
+                      ? null
+                      : (v) => setState(() {
+                        _cashConfirmed = v ?? false;
+                        if (_cashConfirmed) _serverError = null;
+                      }),
+              title: Text('I have collected ${formatRupees(widget.amountDue)}'),
+            ),
+            const SizedBox(height: AppTokens.s8),
+            AnimatedBuilder(
+              animation: _shakeAnimation,
+              builder: (context, child) {
+                final double dx = _shakeAnimation.value;
+                // Simple shake offset calculation
+                final double offset =
+                    dx == 0
+                        ? 0
+                        : (dx *
+                            (1.0 - (dx / 24.0).clamp(0.0, 1.0)) *
+                            ((dx * 4).floor() % 2 == 0 ? 1 : -1));
+                return Transform.translate(
+                  offset: Offset(offset, 0),
+                  child: child,
                 );
-              }),
+              },
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                children: List.generate(4, (index) {
+                  return Semantics(
+                    textField: true,
+                    label: 'Code digit ${index + 1} of 4',
+                    child: SizedBox(
+                      width: 56,
+                      height: 56,
+                      child: KeyboardListener(
+                        focusNode: _keyNodes[index], // dedicated listener node
+                        onKeyEvent: (event) => _onDigitDelete(index, event),
+                        child: TextFormField(
+                          controller: _controllers[index],
+                          focusNode: _focusNodes[index],
+                          keyboardType: TextInputType.number,
+                          textAlign: TextAlign.center,
+                          maxLength: 1,
+                          style: TextStyle(
+                            fontSize: 22,
+                            fontWeight: FontWeight.bold,
+                            color:
+                                _serverError != null
+                                    ? scheme.error
+                                    : scheme.onSurface,
+                          ),
+                          inputFormatters: [
+                            FilteringTextInputFormatter.digitsOnly,
+                            // Pasting the whole code into any box spreads it across
+                            // the boxes instead of being cut to one digit.
+                            _PasteSplitter((digits) => _spread(index, digits)),
+                          ],
+                          decoration: InputDecoration(
+                            counterText: '',
+                            filled: true,
+                            fillColor: scheme.surfaceContainerHighest
+                                .withValues(alpha: 0.4),
+                            contentPadding: EdgeInsets.zero,
+                            enabledBorder: OutlineInputBorder(
+                              borderRadius: BorderRadius.circular(
+                                AppTokens.rMd,
+                              ),
+                              borderSide: BorderSide(
+                                color:
+                                    _serverError != null
+                                        ? scheme.error.withValues(alpha: 0.5)
+                                        : scheme.outlineVariant,
+                              ),
+                            ),
+                            focusedBorder: OutlineInputBorder(
+                              borderRadius: BorderRadius.circular(
+                                AppTokens.rMd,
+                              ),
+                              borderSide: BorderSide(
+                                color:
+                                    _serverError != null
+                                        ? scheme.error
+                                        : scheme.primary,
+                                width: 2.0,
+                              ),
+                            ),
+                          ),
+                          onChanged: (val) => _onDigitInput(index, val),
+                        ),
+                      ),
+                    ),
+                  );
+                }),
+              ),
             ),
-          ),
-          if (_serverError != null) ...[
-            const SizedBox(height: 16),
-            Text(
-              _serverError!,
-              textAlign: TextAlign.center,
-              style: Theme.of(context)
-                  .textTheme
-                  .bodySmall
-                  ?.copyWith(color: scheme.error, fontWeight: FontWeight.bold),
-            ),
+            if (_serverError != null) ...[
+              const SizedBox(height: 16),
+              Text(
+                _serverError!,
+                textAlign: TextAlign.center,
+                style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                  color: scheme.error,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+            ],
           ],
-        ],
+        ),
       ),
       actions: [
         TextButton(
           onPressed: _isVerifying ? null : () => Navigator.pop(context),
           child: Text(
             'Cancel',
-            style: TextStyle(color: scheme.onSurfaceVariant, fontWeight: FontWeight.bold),
+            style: TextStyle(
+              color: scheme.onSurfaceVariant,
+              fontWeight: FontWeight.bold,
+            ),
           ),
         ),
         ElevatedButton(
@@ -347,17 +406,49 @@ class _OtpVerificationGridState extends State<OtpVerificationGrid>
             backgroundColor: scheme.primary,
             foregroundColor: scheme.onPrimary,
             elevation: 0,
-            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(AppTokens.rSm)),
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(AppTokens.rSm),
+            ),
           ),
-          child: _isVerifying
-              ? SizedBox(
-                  width: 20,
-                  height: 20,
-                  child: CircularProgressIndicator(color: scheme.onPrimary, strokeWidth: 2),
-                )
-              : const Text('Verify', style: TextStyle(fontWeight: FontWeight.bold)),
+          child:
+              _isVerifying
+                  ? SizedBox(
+                    width: 20,
+                    height: 20,
+                    child: CircularProgressIndicator(
+                      color: scheme.onPrimary,
+                      strokeWidth: 2,
+                    ),
+                  )
+                  : const Text(
+                    'Verify',
+                    style: TextStyle(fontWeight: FontWeight.bold),
+                  ),
         ),
       ],
+    );
+  }
+}
+
+/// Notices a multi-digit edit (a paste) in a single-digit box: keeps the first
+/// digit in that box and hands the whole text to [onPaste] to spread out.
+class _PasteSplitter extends TextInputFormatter {
+  _PasteSplitter(this.onPaste);
+
+  final void Function(String digits) onPaste;
+
+  @override
+  TextEditingValue formatEditUpdate(
+    TextEditingValue oldValue,
+    TextEditingValue newValue,
+  ) {
+    if (newValue.text.length <= 1) return newValue;
+    // Applying it now would rebuild controllers mid-edit; do it right after.
+    final digits = newValue.text;
+    scheduleMicrotask(() => onPaste(digits));
+    return TextEditingValue(
+      text: digits[0],
+      selection: const TextSelection.collapsed(offset: 1),
     );
   }
 }

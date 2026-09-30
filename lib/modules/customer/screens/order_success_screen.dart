@@ -5,6 +5,7 @@ import '../../../core/design/widgets/biometric_reveal.dart';
 import '../../../core/providers/order_provider.dart';
 import '../../../core/utils/route_generator.dart';
 import 'package:provider/provider.dart';
+import '../../../core/utils/money.dart';
 
 /// Displayed immediately after a successful order placement.
 /// Shows an animated checkmark, the delivery OTP, and navigation CTAs.
@@ -106,7 +107,7 @@ class _OrderSuccessScreenState extends State<OrderSuccessScreen>
                       Text(
                         'Order #${widget.orderId.substring(0, 6).toUpperCase()} '
                         'is confirmed.\n'
-                        'Total: ₹${widget.total.toStringAsFixed(2)} (COD)',
+                        'Total: ${formatRupees(widget.total)} (COD)',
                         style: TextStyle(
                             color: scheme.onSurfaceVariant,
                             fontSize: 14,

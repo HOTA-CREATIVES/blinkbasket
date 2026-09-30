@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 import '../app_tokens.dart';
 
-/// Standard container card conforming to JC Mart design system.
+/// Standard container card conforming to J C Mart design system.
 /// Provides consistent border, radius, surface background, and interactive ink states.
 class AppCard extends StatelessWidget {
   final Widget child;

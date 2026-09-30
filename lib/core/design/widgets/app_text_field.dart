@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 import '../app_tokens.dart';
 
-/// Centralized, production-grade text field for JC Mart.
+/// Centralized, production-grade text field for J C Mart.
 /// Provides consistent borders, typography, error states, and optional password reveal.
 class AppTextField extends StatefulWidget {
   final TextEditingController? controller;

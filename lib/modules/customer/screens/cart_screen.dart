@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../../../core/design/app_tokens.dart';
 import '../../../core/design/widgets/empty_state.dart';
+import '../../../core/design/widgets/bill_row.dart';
 import '../../../core/design/widgets/cart_changes_dialog.dart';
 import '../../../core/design/widgets/product_card.dart';
 import '../../../core/design/widgets/quantity_stepper.dart';
@@ -33,12 +34,14 @@ class _CartScreenState extends State<CartScreen> {
   @override
   Widget build(BuildContext context) {
     return StreamBuilder<AppConfig>(
-      stream: Provider.of<ConfigProvider>(context, listen: false).streamAppConfig(),
+      stream:
+          Provider.of<ConfigProvider>(context, listen: false).streamAppConfig(),
       builder: (context, configSnapshot) {
         final deliveryFeeConfig =
             configSnapshot.data?.deliveryFee ?? _fallbackDeliveryFee;
         final freeDeliveryAboveConfig =
-            configSnapshot.data?.freeDeliveryAbove ?? _fallbackFreeDeliveryAbove;
+            configSnapshot.data?.freeDeliveryAbove ??
+            _fallbackFreeDeliveryAbove;
         return _buildScaffold(
           context,
           deliveryFeeConfig,
@@ -63,325 +66,343 @@ class _CartScreenState extends State<CartScreen> {
     final deliveryFee = freeDelivery ? 0.0 : deliveryFeeConfig;
     final grandTotal = subtotal + deliveryFee;
     final amountToFree = freeDeliveryAboveConfig - subtotal;
-    final hasRxItem =
-        cartProvider.items.values.any((c) => c.product.requiresPrescription);
+    final hasRxItem = cartProvider.items.values.any(
+      (c) => c.product.requiresPrescription,
+    );
 
     return Scaffold(
       appBar: AppBar(title: const Text('My Cart')),
-      body: cartProvider.items.isEmpty
-          ? const EmptyState(
-              icon: Icons.shopping_cart_outlined,
-              title: 'Your cart is empty',
-              message: 'Browse the shop and add items to your cart.',
-            )
-          : Form(
-              key: _formKey,
-              child: ListView(
-                padding: const EdgeInsets.all(AppTokens.s16),
-                children: [
-                  // What changed since the cart was loaded (price moved, stock
-                  // ran down, item removed).
-                  if (cartProvider.pendingChanges.isNotEmpty)
-                    Container(
-                      margin: const EdgeInsets.only(bottom: AppTokens.s12),
-                      padding: const EdgeInsets.all(AppTokens.s12),
-                      decoration: BoxDecoration(
-                        color: scheme.tertiaryContainer.withValues(alpha: 0.6),
-                        borderRadius: BorderRadius.circular(AppTokens.rMd),
-                      ),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Row(
-                            children: [
-                              const Icon(Icons.info_outline_rounded, size: 18),
-                              const SizedBox(width: AppTokens.s8),
-                              const Expanded(
+      body:
+          cartProvider.items.isEmpty
+              ? const EmptyState(
+                icon: Icons.shopping_cart_outlined,
+                title: 'Your cart is empty',
+                message: 'Browse the shop and add items to your cart.',
+              )
+              : Form(
+                key: _formKey,
+                child: ListView(
+                  padding: const EdgeInsets.all(AppTokens.s16),
+                  children: [
+                    // What changed since the cart was loaded (price moved, stock
+                    // ran down, item removed).
+                    if (cartProvider.pendingChanges.isNotEmpty)
+                      Container(
+                        margin: const EdgeInsets.only(bottom: AppTokens.s12),
+                        padding: const EdgeInsets.all(AppTokens.s12),
+                        decoration: BoxDecoration(
+                          color: scheme.tertiaryContainer.withValues(
+                            alpha: 0.6,
+                          ),
+                          borderRadius: BorderRadius.circular(AppTokens.rMd),
+                        ),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Row(
+                              children: [
+                                const Icon(
+                                  Icons.info_outline_rounded,
+                                  size: 18,
+                                ),
+                                const SizedBox(width: AppTokens.s8),
+                                const Expanded(
+                                  child: Text(
+                                    'Your cart was updated',
+                                    style: TextStyle(
+                                      fontWeight: FontWeight.w800,
+                                    ),
+                                  ),
+                                ),
+                                TextButton(
+                                  onPressed: cartProvider.dismissPendingChanges,
+                                  child: const Text('Dismiss'),
+                                ),
+                              ],
+                            ),
+                            for (final change in cartProvider.pendingChanges)
+                              Padding(
+                                padding: const EdgeInsets.only(
+                                  top: AppTokens.s4,
+                                ),
                                 child: Text(
-                                  'Your cart was updated',
-                                  style: TextStyle(fontWeight: FontWeight.w800),
+                                  change.message,
+                                  style: const TextStyle(fontSize: 13),
                                 ),
                               ),
-                              TextButton(
-                                onPressed: cartProvider.dismissPendingChanges,
-                                child: const Text('Dismiss'),
-                              ),
-                            ],
-                          ),
-                          for (final change in cartProvider.pendingChanges)
-                            Padding(
-                              padding: const EdgeInsets.only(top: AppTokens.s4),
-                              child: Text(change.message, style: const TextStyle(fontSize: 13)),
+                          ],
+                        ),
+                      ),
+                    // Free delivery nudge
+                    if (!freeDelivery && amountToFree > 0)
+                      Container(
+                        margin: const EdgeInsets.only(bottom: AppTokens.s12),
+                        padding: const EdgeInsets.all(AppTokens.s12),
+                        decoration: BoxDecoration(
+                          color: AppTokens.accent.withValues(alpha: 0.12),
+                          borderRadius: BorderRadius.circular(AppTokens.rMd),
+                        ),
+                        child: Row(
+                          children: [
+                            const Icon(
+                              Icons.electric_moped_rounded,
+                              color: AppTokens.accent,
+                              size: 20,
                             ),
-                        ],
+                            const SizedBox(width: AppTokens.s8),
+                            Expanded(
+                              child: Text(
+                                'Add ${formatRupees(amountToFree)} more for FREE delivery!',
+                                style: const TextStyle(
+                                  fontSize: 13,
+                                  fontWeight: FontWeight.w700,
+                                  color: Color(0xFFB45309),
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+
+                    // Cart items
+                    Card(
+                      child: ListView.separated(
+                        shrinkWrap: true,
+                        physics: const NeverScrollableScrollPhysics(),
+                        itemCount: cartProvider.items.length,
+                        separatorBuilder: (_, __) => const Divider(height: 1),
+                        itemBuilder: (context, index) {
+                          final item = cartProvider.items.values.elementAt(
+                            index,
+                          );
+
+                          return Padding(
+                            padding: const EdgeInsets.all(AppTokens.s12),
+                            child: Row(
+                              children: [
+                                ClipRRect(
+                                  borderRadius: BorderRadius.circular(
+                                    AppTokens.rMd,
+                                  ),
+                                  child: SizedBox(
+                                    width: 56,
+                                    height: 56,
+                                    child: ProductImage(
+                                      imageUrl: item.product.imageUrl,
+                                    ),
+                                  ),
+                                ),
+                                const SizedBox(width: AppTokens.s12),
+                                Expanded(
+                                  child: Column(
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.start,
+                                    children: [
+                                      Text(
+                                        item.product.name,
+                                        maxLines: 1,
+                                        overflow: TextOverflow.ellipsis,
+                                        style: const TextStyle(
+                                          fontWeight: FontWeight.w700,
+                                          fontSize: 14,
+                                        ),
+                                      ),
+                                      const SizedBox(height: 2),
+                                      Text(
+                                        '${formatRupees(item.product.effectivePrice)} / ${item.product.unit}',
+                                        style: TextStyle(
+                                          color: scheme.onSurfaceVariant,
+                                          fontSize: 12,
+                                        ),
+                                      ),
+                                      const SizedBox(height: AppTokens.s8),
+                                      Row(
+                                        mainAxisAlignment:
+                                            MainAxisAlignment.spaceBetween,
+                                        children: [
+                                          QuantityStepper(
+                                            quantity: item.quantity,
+                                            onIncrement:
+                                                () => cartProvider.addItem(
+                                                  item.product,
+                                                ),
+                                            onDecrement:
+                                                () =>
+                                                    cartProvider.decrementItem(
+                                                      item.product.id,
+                                                    ),
+                                            canIncrement:
+                                                item.quantity <
+                                                item.product.sellableStock,
+                                          ),
+                                          Flexible(
+                                            child: Text(
+                                              formatRupees(
+                                                item.product.effectivePrice *
+                                                    item.quantity,
+                                              ),
+                                              textAlign: TextAlign.end,
+                                              style: const TextStyle(
+                                                fontWeight: FontWeight.w800,
+                                                fontSize: 15,
+                                              ),
+                                            ),
+                                          ),
+                                        ],
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                              ],
+                            ),
+                          );
+                        },
                       ),
                     ),
-                  // Free delivery nudge
-                  if (!freeDelivery && amountToFree > 0)
+                    const SizedBox(height: AppTokens.s16),
+
+                    // Prescription notice
+                    if (hasRxItem) ...[
+                      Container(
+                        padding: const EdgeInsets.all(AppTokens.s12),
+                        decoration: BoxDecoration(
+                          color: AppTokens.medicine.withValues(alpha: 0.1),
+                          borderRadius: BorderRadius.circular(AppTokens.rMd),
+                        ),
+                        child: const Row(
+                          children: [
+                            Icon(
+                              Icons.medical_information_outlined,
+                              color: AppTokens.medicine,
+                              size: 20,
+                            ),
+                            SizedBox(width: AppTokens.s8),
+                            Expanded(
+                              child: Text(
+                                'Prescription medicines can\'t be ordered in the app yet. Remove them from your cart to check out.',
+                                style: TextStyle(
+                                  fontSize: 12.5,
+                                  color: AppTokens.medicine,
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                      const SizedBox(height: AppTokens.s16),
+                    ],
+
+                    // Bill summary
+                    Card(
+                      child: Padding(
+                        padding: const EdgeInsets.all(AppTokens.s16),
+                        child: Column(
+                          children: [
+                            BillRow(
+                              label: 'Item subtotal',
+                              value: formatRupees(subtotal),
+                            ),
+                            BillRow.deliveryFee(
+                              fee:
+                                  freeDelivery
+                                      ? deliveryFeeConfig
+                                      : deliveryFee,
+                              isFree: freeDelivery,
+                            ),
+                            const Divider(height: AppTokens.s24),
+                            BillRow(
+                              label: 'Total',
+                              value: formatRupees(grandTotal),
+                              emphasised: true,
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                    const SizedBox(height: AppTokens.s16),
+
+                    // COD notice
                     Container(
-                      margin: const EdgeInsets.only(bottom: AppTokens.s12),
                       padding: const EdgeInsets.all(AppTokens.s12),
                       decoration: BoxDecoration(
-                        color: AppTokens.accent.withValues(alpha: 0.12),
+                        color: scheme.primary.withValues(alpha: 0.07),
                         borderRadius: BorderRadius.circular(AppTokens.rMd),
                       ),
                       child: Row(
                         children: [
-                          const Icon(Icons.electric_moped_rounded,
-                              color: AppTokens.accent, size: 20),
-                          const SizedBox(width: AppTokens.s8),
+                          Icon(
+                            Icons.payments_rounded,
+                            color: scheme.primary,
+                            size: 22,
+                          ),
+                          const SizedBox(width: AppTokens.s12),
                           Expanded(
-                            child: Text(
-                              'Add ₹${amountToFree.toStringAsFixed(0)} more for FREE delivery!',
-                              style: const TextStyle(
-                                fontSize: 13,
-                                fontWeight: FontWeight.w700,
-                                color: Color(0xFFB45309),
-                              ),
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-
-                  // Cart items
-                  Card(
-                    child: ListView.separated(
-                      shrinkWrap: true,
-                      physics: const NeverScrollableScrollPhysics(),
-                      itemCount: cartProvider.items.length,
-                      separatorBuilder: (_, __) => const Divider(height: 1),
-                      itemBuilder: (context, index) {
-                        final item =
-                            cartProvider.items.values.elementAt(index);
-
-                        return Padding(
-                          padding: const EdgeInsets.all(AppTokens.s12),
-                          child: Row(
-                            children: [
-                              ClipRRect(
-                                borderRadius:
-                                    BorderRadius.circular(AppTokens.rMd),
-                                child: SizedBox(
-                                  width: 56,
-                                  height: 56,
-                                  child: ProductImage(
-                                      imageUrl: item.product.imageUrl),
-                                ),
-                              ),
-                              const SizedBox(width: AppTokens.s12),
-                              Expanded(
-                                child: Column(
-                                  crossAxisAlignment: CrossAxisAlignment.start,
-                                  children: [
-                                    Text(
-                                      item.product.name,
-                                      maxLines: 1,
-                                      overflow: TextOverflow.ellipsis,
-                                      style: const TextStyle(
-                                          fontWeight: FontWeight.w700,
-                                          fontSize: 14),
-                                    ),
-                                    const SizedBox(height: 2),
-                                    Text(
-                                      '${formatRupees(item.product.effectivePrice)} / ${item.product.unit}',
-                                      style: TextStyle(
-                                          color: scheme.onSurfaceVariant,
-                                          fontSize: 12),
-                                    ),
-                                    const SizedBox(height: AppTokens.s8),
-                                    Row(
-                                      mainAxisAlignment:
-                                          MainAxisAlignment.spaceBetween,
-                                      children: [
-                                        QuantityStepper(
-                                          quantity: item.quantity,
-                                          onIncrement: () => cartProvider
-                                              .addItem(item.product),
-                                          onDecrement: () =>
-                                              cartProvider.decrementItem(
-                                                  item.product.id),
-                                          canIncrement: item.quantity <
-                                              item.product.sellableStock,
-                                        ),
-                                        Text(
-                                          formatRupees(item.product.effectivePrice * item.quantity),
-                                          style: const TextStyle(
-                                              fontWeight: FontWeight.w800,
-                                              fontSize: 15),
-                                        ),
-                                      ],
-                                    ),
-                                  ],
-                                ),
-                              ),
-                            ],
-                          ),
-                        );
-                      },
-                    ),
-                  ),
-                  const SizedBox(height: AppTokens.s16),
-
-                  // Prescription notice
-                  if (hasRxItem) ...[
-                    Container(
-                      padding: const EdgeInsets.all(AppTokens.s12),
-                      decoration: BoxDecoration(
-                        color: AppTokens.medicine.withValues(alpha: 0.1),
-                        borderRadius: BorderRadius.circular(AppTokens.rMd),
-                      ),
-                      child: const Row(
-                        children: [
-                          Icon(Icons.medical_information_outlined,
-                              color: AppTokens.medicine, size: 20),
-                          SizedBox(width: AppTokens.s8),
-                          Expanded(
-                            child: Text(
-                              'Prescription medicines can\'t be ordered in the app yet. Remove them from your cart to check out.',
-                              style: TextStyle(
-                                  fontSize: 12.5, color: AppTokens.medicine),
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                    const SizedBox(height: AppTokens.s16),
-                  ],
-
-
-                  // Bill summary
-                  Card(
-                    child: Padding(
-                      padding: const EdgeInsets.all(AppTokens.s16),
-                      child: Column(
-                        children: [
-                          _billRow(context, 'Item Subtotal',
-                              '₹${subtotal.toStringAsFixed(2)}'),
-                          const SizedBox(height: AppTokens.s8),
-                          Row(
-                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                            children: [
-                              Text('Delivery Fee',
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  'Cash on Delivery',
                                   style: TextStyle(
-                                      color: scheme.onSurfaceVariant)),
-                              freeDelivery
-                                  ? Row(
-                                      children: [
-                                        Text(
-                                          '₹${deliveryFeeConfig.toStringAsFixed(0)} ',
-                                          style: TextStyle(
-                                            color: scheme.onSurfaceVariant,
-                                            decoration:
-                                                TextDecoration.lineThrough,
-                                          ),
-                                        ),
-                                        Text(
-                                          'FREE',
-                                          style: TextStyle(
-                                            color: scheme.primary,
-                                            fontWeight: FontWeight.w800,
-                                          ),
-                                        ),
-                                      ],
-                                    )
-                                  : Text('₹${deliveryFee.toStringAsFixed(2)}'),
-                            ],
-                          ),
-                          const Divider(height: AppTokens.s24),
-                          Row(
-                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                            children: [
-                              const Text('Grand Total',
+                                    fontWeight: FontWeight.w800,
+                                    fontSize: 14,
+                                    color: scheme.primary,
+                                  ),
+                                ),
+                                Text(
+                                  'Pay the rider in cash when your order arrives.',
                                   style: TextStyle(
-                                      fontWeight: FontWeight.w800,
-                                      fontSize: 17)),
-                              Text(
-                                '₹${grandTotal.toStringAsFixed(2)}',
-                                style: TextStyle(
-                                  fontWeight: FontWeight.w800,
-                                  fontSize: 17,
-                                  color: scheme.primary,
-                                ),
-                              ),
-                            ],
-                          ),
-                        ],
-                      ),
-                    ),
-                  ),
-                  const SizedBox(height: AppTokens.s16),
-
-                  // COD notice
-                  Container(
-                    padding: const EdgeInsets.all(AppTokens.s12),
-                    decoration: BoxDecoration(
-                      color: scheme.primary.withValues(alpha: 0.07),
-                      borderRadius: BorderRadius.circular(AppTokens.rMd),
-                    ),
-                    child: Row(
-                      children: [
-                        Icon(Icons.payments_rounded,
-                            color: scheme.primary, size: 22),
-                        const SizedBox(width: AppTokens.s12),
-                        Expanded(
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Text(
-                                'Cash on Delivery',
-                                style: TextStyle(
-                                  fontWeight: FontWeight.w800,
-                                  fontSize: 14,
-                                  color: scheme.primary,
-                                ),
-                              ),
-                              Text(
-                                'Pay the rider in cash when your order arrives.',
-                                style: TextStyle(
                                     fontSize: 12,
-                                    color: scheme.onSurfaceVariant),
-                              ),
-                            ],
+                                    color: scheme.onSurfaceVariant,
+                                  ),
+                                ),
+                              ],
+                            ),
                           ),
-                        ),
-                      ],
+                        ],
+                      ),
                     ),
-                  ),
-                  const SizedBox(height: 110),
-                ],
-              ),
-            ),
-      bottomNavigationBar: cartProvider.items.isEmpty
-          ? null
-          : SafeArea(
-              child: Padding(
-                padding: const EdgeInsets.fromLTRB(
-                    AppTokens.s16, AppTokens.s8, AppTokens.s16, AppTokens.s16),
-                child: ElevatedButton(
-                  style: ElevatedButton.styleFrom(
-                    padding:
-                        const EdgeInsets.symmetric(vertical: AppTokens.s16),
-                  ),
-                  onPressed: hasRxItem || !storeOpen || cartProvider.isValidating
-                      ? null
-                      : () => _goToCheckout(context, cartProvider),
-                  child: cartProvider.isValidating
-                      ? const SizedBox(
-                          width: 20,
-                          height: 20,
-                          child: CircularProgressIndicator(strokeWidth: 2),
-                        )
-                      : Text(
-                          !storeOpen
-                              ? 'Store is closed'
-                              : hasRxItem
-                                  ? 'Remove prescription items to proceed'
-                                  : 'Checkout  •  ${formatRupees(grandTotal)}',
-                        ),
+                    const SizedBox(height: 110),
+                  ],
                 ),
               ),
-            ),
+      bottomNavigationBar:
+          cartProvider.items.isEmpty
+              ? null
+              : SafeArea(
+                child: Padding(
+                  padding: const EdgeInsets.fromLTRB(
+                    AppTokens.s16,
+                    AppTokens.s8,
+                    AppTokens.s16,
+                    AppTokens.s16,
+                  ),
+                  child: ElevatedButton(
+                    style: ElevatedButton.styleFrom(
+                      padding: const EdgeInsets.symmetric(
+                        vertical: AppTokens.s16,
+                      ),
+                    ),
+                    onPressed:
+                        hasRxItem || !storeOpen || cartProvider.isValidating
+                            ? null
+                            : () => _goToCheckout(context, cartProvider),
+                    child:
+                        cartProvider.isValidating
+                            ? const SizedBox(
+                              width: 20,
+                              height: 20,
+                              child: CircularProgressIndicator(strokeWidth: 2),
+                            )
+                            : Text(
+                              !storeOpen
+                                  ? 'Store is closed'
+                                  : hasRxItem
+                                  ? 'Remove prescription items to proceed'
+                                  : 'Checkout  •  ${formatRupees(grandTotal)}',
+                            ),
+                  ),
+                ),
+              ),
     );
   }
 
@@ -399,16 +420,5 @@ class _CartScreenState extends State<CartScreen> {
       if (!proceed || !context.mounted) return;
     }
     navigator.pushNamed(RouteGenerator.checkout);
-  }
-
-  Widget _billRow(BuildContext context, String label, String value) {
-    final scheme = Theme.of(context).colorScheme;
-    return Row(
-      mainAxisAlignment: MainAxisAlignment.spaceBetween,
-      children: [
-        Text(label, style: TextStyle(color: scheme.onSurfaceVariant)),
-        Text(value),
-      ],
-    );
   }
 }

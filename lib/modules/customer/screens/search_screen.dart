@@ -261,12 +261,7 @@ class _SearchScreenState extends State<SearchScreen> {
               Expanded(
                 child: GridView.builder(
                   padding: const EdgeInsets.all(AppTokens.s16),
-                  gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-                    crossAxisCount: 2,
-                    childAspectRatio: 0.65,
-                    crossAxisSpacing: AppTokens.s16,
-                    mainAxisSpacing: AppTokens.s16,
-                  ),
+                  gridDelegate: productGridDelegate(context, spacing: AppTokens.s16),
                   itemCount: filtered.length,
                   itemBuilder: (context, index) {
               final product = filtered[index];

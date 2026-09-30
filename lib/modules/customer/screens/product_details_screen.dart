@@ -12,6 +12,7 @@ import '../../../core/providers/product_provider.dart';
 import '../../../core/providers/profile_provider.dart';
 import '../../../core/utils/route_generator.dart';
 import '../../../domain/entities/product.dart';
+import '../../../core/utils/money.dart';
 
 /// Full-page product details screen, Blinkit-style: hero image with a
 /// floating ADD/quantity control, delivery ETA badge, price, product
@@ -649,8 +650,4 @@ class _SimilarProducts extends StatelessWidget {
   }
 }
 
-String _formatPrice(double price) {
-  return price == price.roundToDouble()
-      ? price.toStringAsFixed(0)
-      : price.toStringAsFixed(2);
-}
+String _formatPrice(double price) => formatAmount(price);

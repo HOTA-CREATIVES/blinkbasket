@@ -11,6 +11,8 @@ import '../../../../core/utils/route_generator.dart';
 import '../../../../domain/entities/order.dart';
 import '../../../../domain/entities/support_ticket.dart';
 import '../../../../core/utils/app_exception.dart';
+import '../../../../core/utils/money.dart';
+import '../../../../core/utils/date_format.dart';
 
 class SupportChatScreen extends StatefulWidget {
   final SupportTicket ticket;
@@ -361,7 +363,7 @@ class _SupportChatScreenState extends State<SupportChatScreen> {
                     ),
                     Text(
                       order != null
-                          ? '${order.items.length} items · ₹${order.totalAmount.toStringAsFixed(0)} · ${order.status.toUpperCase()}'
+                          ? '${order.items.length} items · ${formatRupees(order.totalAmount)} · ${order.status.toUpperCase()}'
                           : 'Loading order details...',
                       style: TextStyle(fontSize: 12, color: Colors.grey.shade600),
                     ),
@@ -739,10 +741,5 @@ class _SupportChatScreenState extends State<SupportChatScreen> {
     );
   }
 
-  String _formatTime(DateTime dt) {
-    final hour = dt.hour % 12 == 0 ? 12 : dt.hour % 12;
-    final period = dt.hour >= 12 ? 'PM' : 'AM';
-    final minute = dt.minute.toString().padLeft(2, '0');
-    return '$hour:$minute $period';
-  }
+  String _formatTime(DateTime dt) => formatTime(dt);
 }

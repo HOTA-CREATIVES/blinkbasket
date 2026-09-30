@@ -6,6 +6,7 @@ import 'package:hypermart/domain/entities/rider_location.dart';
 import 'package:hypermart/domain/repositories/order_repository.dart';
 import 'package:hypermart/modules/delivery/widgets/otp_verification_grid.dart';
 import 'package:provider/provider.dart';
+import '../../helpers/test_fonts.dart';
 
 class _FakeOrderRepository implements OrderRepository {
   final List<({String orderId, String otp, double amount, RiderLocation? location})> calls = [];
@@ -149,6 +150,108 @@ void main() {
 
     expect(repo.calls.single.location?.lat, 16.546);
     expect(repo.calls.single.location?.accuracyMeters, 8);
+  });
+
+  group('accessibility and input', () {
+    List<String> boxes(WidgetTester tester) => [
+          for (var i = 0; i < 4; i++)
+            tester.widget<TextFormField>(find.byType(TextFormField).at(i)).controller!.text,
+        ];
+
+    testWidgets('pasting the whole code into the first box fills every box and submits', (tester) async {
+      final repo = _FakeOrderRepository();
+      await _pump(tester, repo);
+      await tester.tap(find.byType(CheckboxListTile));
+      await tester.pump();
+
+      await tester.enterText(find.byType(TextFormField).at(0), '4821');
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 50));
+
+      expect(repo.calls, hasLength(1));
+      expect(repo.calls.single.otp, '4821');
+    });
+
+    testWidgets('pasting keeps only digits and ignores formatting characters', (tester) async {
+      final repo = _FakeOrderRepository();
+      await _pump(tester, repo);
+      await tester.tap(find.byType(CheckboxListTile));
+      await tester.pump();
+
+      await tester.enterText(find.byType(TextFormField).at(0), '4 8-2 1');
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 50));
+
+      expect(repo.calls.single.otp, '4821');
+    });
+
+    testWidgets('a partial paste fills the boxes it can and waits for the rest', (tester) async {
+      final repo = _FakeOrderRepository();
+      await _pump(tester, repo);
+      await tester.tap(find.byType(CheckboxListTile));
+      await tester.pump();
+
+      await tester.enterText(find.byType(TextFormField).at(0), '48');
+      await tester.pump();
+      await tester.pump();
+
+      expect(boxes(tester), ['4', '8', '', '']);
+      expect(repo.calls, isEmpty);
+    });
+
+    testWidgets('pasting into a later box spreads from that box and never past the last', (tester) async {
+      final repo = _FakeOrderRepository();
+      await _pump(tester, repo);
+      await tester.tap(find.byType(CheckboxListTile));
+      await tester.pump();
+
+      await tester.enterText(find.byType(TextFormField).at(2), '99999');
+      await tester.pump();
+      await tester.pump();
+
+      expect(boxes(tester), ['', '', '9', '9']);
+    });
+
+    testWidgets('each box is announced to a screen reader with its position', (tester) async {
+      final handle = tester.ensureSemantics();
+      await _pump(tester, _FakeOrderRepository());
+
+      for (var i = 1; i <= 4; i++) {
+        expect(find.bySemanticsLabel(RegExp('Code digit $i of 4')), findsOneWidget);
+      }
+      handle.dispose();
+    });
+  });
+
+  group('large text', () {
+    testWidgets('the dialog stays usable on a small screen at 2x text (scrolls instead of overflowing)',
+        (tester) async {
+      if (!await loadRealisticFonts()) return markTestSkipped('Flutter SDK fonts unavailable');
+      tester.view.physicalSize = const Size(360 * 2, 640 * 2);
+      tester.view.devicePixelRatio = 2;
+      addTearDown(tester.view.reset);
+
+      await tester.pumpWidget(
+        ChangeNotifierProvider<OrderProvider>(
+          create: (_) => OrderProvider(repository: _FakeOrderRepository()),
+          child: testApp(
+            textScale: 2.0,
+            home: Scaffold(
+              body: OtpVerificationGrid(
+                orderId: 'order1',
+                amountDue: 1299.5,
+                locate: () async => null,
+                onSuccess: () {},
+              ),
+            ),
+          ),
+        ),
+      );
+      await tester.pump();
+
+      expect(tester.takeException(), isNull, reason: 'no RenderFlex overflow');
+      expect(find.text('Collect ₹1299.50 in cash'), findsOneWidget);
+    });
   });
 
   testWidgets('a GPS error never stops the delivery', (tester) async {

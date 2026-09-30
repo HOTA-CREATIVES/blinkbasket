@@ -216,7 +216,7 @@ class _CustomerHomeScreenState extends State<CustomerHomeScreen> {
             mainAxisSize: MainAxisSize.min,
             children: [
               const Text(
-                'JC Mart',
+                'J C Mart',
                 style: TextStyle(
                   fontSize: 18,
                   fontWeight: FontWeight.w900,
@@ -432,12 +432,7 @@ class _CustomerHomeScreenState extends State<CustomerHomeScreen> {
             return SliverPadding(
               padding: const EdgeInsets.all(16),
               sliver: SliverGrid(
-                gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-                  crossAxisCount: 2,
-                  childAspectRatio: 0.65,
-                  crossAxisSpacing: 12,
-                  mainAxisSpacing: 12,
-                ),
+                gridDelegate: productGridDelegate(context),
                 delegate: SliverChildBuilderDelegate(
                   (context, index) {
                     final product = products[index];
@@ -477,8 +472,7 @@ class _CustomerHomeScreenState extends State<CustomerHomeScreen> {
         body: storeCustomScrollView,
       ),
       const CartScreen(),
-      const OrderHistoryScreen(),
-      const OrderHistoryScreen(),
+      OrderHistoryScreen(onBrowse: () => setState(() => _currentIndex = 0)),
     ];
 
     return Scaffold(
@@ -499,29 +493,7 @@ class _CustomerHomeScreenState extends State<CustomerHomeScreen> {
             builder: (context, cart, _) {
               return FloatingNavbar(
                 currentIndex: _currentIndex,
-                onTap: (index) {
-                  if (index == 2) {
-                    // Pending / Active Order tab clicked
-                    if (activeOrders.isNotEmpty) {
-                      Navigator.pushNamed(
-                        context,
-                        RouteGenerator.orderTracking,
-                        arguments: activeOrders.first.id,
-                      );
-                    } else {
-                      setState(() => _currentIndex = 3);
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        const SnackBar(
-                          content: Text('No active pending order at the moment.'),
-                          behavior: SnackBarBehavior.floating,
-                          duration: Duration(seconds: 2),
-                        ),
-                      );
-                    }
-                  } else {
-                    setState(() => _currentIndex = index);
-                  }
-                },
+                onTap: (index) => setState(() => _currentIndex = index),
                 items: [
                   const FloatingNavItem(
                     icon: Icons.storefront_outlined,
@@ -534,16 +506,13 @@ class _CustomerHomeScreenState extends State<CustomerHomeScreen> {
                     label: 'Cart',
                     badgeCount: cart.itemCount,
                   ),
+                  // One Orders tab: orders in progress are listed first, each with
+                  // its delivery code and a Track button. The badge counts them.
                   FloatingNavItem(
-                    icon: Icons.directions_bike_outlined,
-                    activeIcon: Icons.directions_bike_rounded,
-                    label: 'Pending',
-                    badgeCount: activeOrders.length,
-                  ),
-                  const FloatingNavItem(
                     icon: Icons.receipt_long_outlined,
                     activeIcon: Icons.receipt_long_rounded,
                     label: 'Orders',
+                    badgeCount: activeOrders.length,
                   ),
                 ],
               );

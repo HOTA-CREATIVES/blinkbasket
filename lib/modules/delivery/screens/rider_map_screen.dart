@@ -10,6 +10,7 @@ import '../../../core/utils/route_generator.dart';
 import '../../../domain/entities/order.dart';
 import '../../../core/utils/app_exception.dart';
 import '../../../core/design/widgets/empty_state.dart';
+import '../../../core/utils/money.dart';
 
 class RiderMapScreen extends StatefulWidget {
   final bool isEmbedded;
@@ -191,7 +192,7 @@ class _RiderMapScreenState extends State<RiderMapScreen> {
                               const Icon(Icons.currency_rupee_rounded, size: 16, color: AppTokens.statusDelivered),
                               const SizedBox(width: 6),
                               Text(
-                                'Collect: ₹${_selectedOrder!.totalAmount.toStringAsFixed(2)}',
+                                'Collect: ${formatRupees(_selectedOrder!.totalAmount)}',
                                 style: const TextStyle(
                                   color: AppTokens.statusDelivered,
                                   fontWeight: FontWeight.bold,

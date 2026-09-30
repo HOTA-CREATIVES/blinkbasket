@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:provider/provider.dart';
 import '../../../core/design/app_tokens.dart';
+import '../../../core/design/widgets/bill_row.dart';
 import '../../../core/design/widgets/delivery_otp_card.dart';
 import '../../../core/design/widgets/empty_state.dart';
 import '../../../core/design/widgets/leaflet_location_picker.dart';
@@ -131,7 +132,7 @@ class OrderTrackingScreen extends StatelessWidget {
                       ),
                       const SizedBox(height: AppTokens.s8),
                       Text(
-                        'COD Total: ₹${order.totalAmount.toStringAsFixed(2)}',
+                        'COD Total: ${formatRupees(order.totalAmount)}',
                         style: TextStyle(
                           color: scheme.primary,
                           fontWeight: FontWeight.w800,
@@ -412,33 +413,33 @@ class OrderTrackingScreen extends StatelessWidget {
                         );
                       }),
                       const Divider(height: AppTokens.s24),
-                      _BillLine(
+                      BillRow(
                         label: 'Item total',
                         value: formatRupees(order.subtotal > 0
                             ? order.subtotal
                             : order.totalAmount - order.deliveryFee),
                       ),
-                      _BillLine(
+                      BillRow(
                         label: 'Delivery fee',
                         value: order.deliveryFee == 0
                             ? 'Free'
                             : formatRupees(order.deliveryFee),
                       ),
-                      _BillLine(
+                      BillRow(
                         label: order.status == 'delivered' ? 'Total paid' : 'Total',
                         value: formatRupees(order.totalAmount),
                         emphasised: true,
                       ),
                       if (order.status == 'delivered') ...[
                         const SizedBox(height: AppTokens.s8),
-                        _BillLine(
+                        BillRow(
                           label: 'Paid in cash to '
                               '${order.deliveryBoyName ?? 'your delivery partner'}',
                           value: formatRupees(
                               order.codCollectedAmount ?? order.totalAmount),
                         ),
                         if (order.deliveredAt != null)
-                          _BillLine(
+                          BillRow(
                             label: 'Delivered',
                             value: formatDateTime(order.deliveredAt!),
                           ),
@@ -568,41 +569,6 @@ class _LiveEtaCountdownState extends State<_LiveEtaCountdown> {
           ),
         );
       },
-    );
-  }
-}
-
-/// One label/value row of the bill on the order screen.
-class _BillLine extends StatelessWidget {
-  final String label;
-  final String value;
-  final bool emphasised;
-
-  const _BillLine({
-    required this.label,
-    required this.value,
-    this.emphasised = false,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
-    final style = TextStyle(
-      fontSize: emphasised ? 15 : 13.5,
-      fontWeight: emphasised ? FontWeight.w800 : FontWeight.w500,
-      color: emphasised ? scheme.onSurface : scheme.onSurfaceVariant,
-    );
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: AppTokens.s4),
-      child: Row(
-        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Expanded(child: Text(label, style: style)),
-          const SizedBox(width: AppTokens.s12),
-          Text(value, style: style),
-        ],
-      ),
     );
   }
 }

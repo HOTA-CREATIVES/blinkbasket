@@ -11,6 +11,7 @@ import '../../../core/utils/contact_launcher.dart';
 import '../../../domain/entities/app_config.dart';
 import '../../../domain/entities/order.dart';
 import '../widgets/otp_verification_grid.dart';
+import '../../../core/utils/money.dart';
 
 /// Statuses where this order is actually assigned to the viewing rider and
 /// the swipe-to-advance slider makes sense. A still-'pending' order reaching
@@ -616,7 +617,7 @@ class _TaskDetailScreenState extends State<_TaskDetailBody> {
                         ),
                         const SizedBox(height: 2),
                         Text(
-                          '₹${widget.order.totalAmount.toStringAsFixed(2)}',
+                          formatRupees(widget.order.totalAmount),
                           style: const TextStyle(
                             color: AppTokens.statusDelivered,
                             fontWeight: FontWeight.bold,
@@ -707,7 +708,7 @@ class _TaskDetailScreenState extends State<_TaskDetailBody> {
                             ),
                           ),
                           subtitle: Text(
-                            'Quantity: ${item.quantity}  •  ₹${item.price.toStringAsFixed(1)} / unit',
+                            'Quantity: ${item.quantity}  •  ${formatRupees(item.price)} / unit',
                             style: TextStyle(
                               fontSize: 12,
                               color:

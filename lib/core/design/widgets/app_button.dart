@@ -9,7 +9,7 @@ enum AppButtonVariant {
   destructive,
 }
 
-/// Production-ready accessible button adhering to JC Mart design system.
+/// Production-ready accessible button adhering to J C Mart design system.
 /// Guaranteed >= 48dp touch targets, clear loading state, and accessible semantics.
 class AppButton extends StatelessWidget {
   final String text;

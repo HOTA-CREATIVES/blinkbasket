@@ -13,6 +13,7 @@ import '../../profile/screens/user_profile_screen.dart';
 import 'rider_map_screen.dart';
 import 'earnings_screen.dart';
 import '../../../core/utils/app_exception.dart';
+import '../../../core/utils/money.dart';
 
 class DeliveryHomeScreen extends StatefulWidget {
   const DeliveryHomeScreen({super.key});
@@ -363,7 +364,7 @@ class _DeliveryHomeScreenState extends State<DeliveryHomeScreen> {
         return Semantics(
           container: true,
           label: 'Order from ${order.customerName}, $itemsSummary, '
-              '₹${order.totalAmount.toStringAsFixed(0)} cash on delivery, '
+              '${formatRupees(order.totalAmount)} cash on delivery, '
               '${isLocal ? "local order" : "nearby zone"}',
           child: Container(
             padding: const EdgeInsets.all(10),
@@ -438,7 +439,7 @@ class _DeliveryHomeScreenState extends State<DeliveryHomeScreen> {
                   mainAxisSize: MainAxisSize.min,
                   children: [
                     Text(
-                      '₹${order.totalAmount.toStringAsFixed(0)}',
+                      formatRupees(order.totalAmount),
                       style: TextStyle(fontWeight: FontWeight.w900, fontSize: 15, color: scheme.primary),
                     ),
                     const SizedBox(height: 6),
@@ -595,7 +596,7 @@ class _DeliveryHomeScreenState extends State<DeliveryHomeScreen> {
                   const Icon(Icons.currency_rupee_rounded,
                       size: 16, color: AppTokens.statusDelivered),
                   const SizedBox(width: AppTokens.s4),
-                  Text('Collect ₹${order.totalAmount.toStringAsFixed(2)} (COD)',
+                  Text('Collect ${formatRupees(order.totalAmount)} (COD)',
                       style: const TextStyle(
                           fontWeight: FontWeight.w800,
                           color: AppTokens.statusDelivered,
@@ -658,7 +659,7 @@ class _DeliveryHomeScreenState extends State<DeliveryHomeScreen> {
             ),
             title: Text('Order #${o.id.substring(0, 6).toUpperCase()}',
                 style: const TextStyle(fontWeight: FontWeight.w700)),
-            subtitle: Text('${o.customerName} • ₹${o.totalAmount.toStringAsFixed(2)}',
+            subtitle: Text('${o.customerName} • ${formatRupees(o.totalAmount)}',
                 style: TextStyle(color: scheme.onSurfaceVariant, fontSize: 13)),
             trailing: StatusChip(status: o.status),
           ),
