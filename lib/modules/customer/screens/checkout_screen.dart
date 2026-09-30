@@ -69,6 +69,35 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
     });
   }
 
+  ({String name, double distanceMeters, bool isInside})? _pinZone() {
+    final lat = _pickedLat;
+    final lng = _pickedLng;
+    if (lat == null || lng == null) return null;
+    return CustomerHelper.nearestZone(
+      lat,
+      lng,
+      Provider.of<ConfigProvider>(context, listen: false).latestServiceZones,
+    );
+  }
+
+  bool _pinIsOutside() => _pinZone()?.isInside == false;
+
+  /// What the pin row says: prompt, the zone the pin is in, or that it is out
+  /// of the delivery area — including when the pin and the selected saved
+  /// address disagree about the village.
+  String _pinLabel() {
+    final zone = _pinZone();
+    if (zone == null) return 'Pin Precise Location on Map';
+    if (!zone.isInside) return 'Pinned location is outside our delivery area';
+    final address = _selectedAddress;
+    if (address != null &&
+        address.village.isNotEmpty &&
+        address.village != zone.name) {
+      return 'Pinned in ${zone.name}, but this address is in ${address.village}';
+    }
+    return 'Location pinned · ${zone.name}';
+  }
+
   String _formatAddressLine(AddressModel address) {
     final parts = [
       address.addressLine1,
@@ -181,6 +210,19 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
     if (latitude == null || longitude == null) {
       setState(() => _isSubmitting = false);
       _showSnackBar('Tap "Pin Precise Location on Map" so the rider can find you.');
+      return;
+    }
+
+    // The server checks the delivery area too, but a customer whose pin (or
+    // saved address) is outside it should hear that now, not after the swipe.
+    final zone = CustomerHelper.nearestZone(
+      latitude,
+      longitude,
+      Provider.of<ConfigProvider>(context, listen: false).latestServiceZones,
+    );
+    if (!zone.isInside) {
+      setState(() => _isSubmitting = false);
+      _showSnackBar("We don't deliver to the pinned location yet. Move the pin inside the delivery area.");
       return;
     }
 
@@ -368,10 +410,18 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
                           // Pin Location Action
                           InkWell(
                             onTap: () {
+                              final zones = Provider.of<ConfigProvider>(context, listen: false)
+                                  .latestServiceZones;
+                              // Start on the customer's own zone, not a
+                              // hardcoded village.
+                              final centre = (_pickedLat != null && _pickedLng != null)
+                                  ? (lat: _pickedLat!, lng: _pickedLng!)
+                                  : CustomerHelper.centerOf(user?.village, zones);
                               LeafletLocationPicker.show(
                                 context: context,
-                                initialLat: _pickedLat ?? 16.5449,
-                                initialLng: _pickedLng ?? 81.5212,
+                                initialLat: centre.lat,
+                                initialLng: centre.lng,
+                                zones: zones,
                                 initialIsPinned: _pickedLat != null,
                                 onConfirmed: (lat, lng) {
                                   if (mounted) {
@@ -396,16 +446,19 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
                                 children: [
                                   Icon(Icons.pin_drop_rounded, size: 18, color: scheme.primary),
                                   const SizedBox(width: 8),
-                                  Text(
-                                    _pickedLat != null ? 'Location Pinned' : 'Pin Precise Location on Map',
-                                    style: TextStyle(
-                                      fontWeight: FontWeight.w700,
-                                      fontSize: 13,
-                                      color: scheme.primary,
+                                  Expanded(
+                                    child: Text(
+                                      _pinLabel(),
+                                      style: TextStyle(
+                                        fontWeight: FontWeight.w700,
+                                        fontSize: 13,
+                                        color: _pinIsOutside() ? scheme.error : scheme.primary,
+                                      ),
                                     ),
                                   ),
-                                  const Spacer(),
-                                  if (_pickedLat != null)
+                                  if (_pickedLat != null && _pinIsOutside())
+                                    Icon(Icons.location_off_outlined, size: 16, color: scheme.error)
+                                  else if (_pickedLat != null)
                                     const Icon(Icons.check_circle_rounded,
                                         size: 16, color: AppTokens.statusDelivered)
                                   else

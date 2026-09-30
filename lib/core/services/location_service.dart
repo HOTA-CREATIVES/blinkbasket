@@ -6,6 +6,11 @@ enum LocationFailure {
   servicesOff,
   denied,
   deniedForever,
+
+  /// Permission is granted but only for approximate location (iOS "Precise
+  /// Location" off / Android "Approximate" chosen), which is too coarse to
+  /// find a house.
+  approximateOnly,
   timeout,
   mocked,
   weakSignal,
@@ -37,7 +42,15 @@ class LocationResult {
 
   /// True when the only way forward is the user changing a system setting.
   bool get canOpenSettings =>
-      failure == LocationFailure.servicesOff || failure == LocationFailure.deniedForever;
+      failure == LocationFailure.servicesOff ||
+      failure == LocationFailure.deniedForever ||
+      failure == LocationFailure.approximateOnly;
+
+  /// True when trying again outdoors / a moment later can plausibly work.
+  bool get canRetry =>
+      failure == LocationFailure.timeout ||
+      failure == LocationFailure.weakSignal ||
+      failure == LocationFailure.unknown;
 
   /// User-facing explanation, with the next step.
   String get message {
@@ -48,6 +61,8 @@ class LocationResult {
         return 'Location permission was denied. Allow it to use GPS, or pin your spot on the map instead.';
       case LocationFailure.deniedForever:
         return 'Location permission is blocked. Enable it in Settings, or pin your spot on the map instead.';
+      case LocationFailure.approximateOnly:
+        return 'Precise location is turned off for this app. Turn it on in Settings, or pin your spot on the map instead.';
       case LocationFailure.timeout:
         return "Couldn't get a GPS fix in time. Move somewhere with a clear sky and try again, or pin your spot on the map.";
       case LocationFailure.mocked:
@@ -64,7 +79,8 @@ class LocationResult {
   Future<void> openSettings() async {
     if (failure == LocationFailure.servicesOff) {
       await Geolocator.openLocationSettings();
-    } else if (failure == LocationFailure.deniedForever) {
+    } else if (failure == LocationFailure.deniedForever ||
+        failure == LocationFailure.approximateOnly) {
       await Geolocator.openAppSettings();
     }
   }
@@ -83,7 +99,16 @@ class LocationService {
   /// lane or the wrong side of a village boundary.
   static const double maxAcceptableAccuracyMeters = 100;
 
+  /// A fix this good ends the search early — no reason to keep the radio on.
+  static const double goodAccuracyMeters = 50;
+
+  /// How long to keep listening for a better fix before settling for the best
+  /// one seen. A single reading is often the coarse network estimate; GPS
+  /// tightens over the next few seconds.
   static const Duration fixTimeout = Duration(seconds: 15);
+
+  /// A cached position older than this is not used as a fallback.
+  static const Duration lastKnownMaxAge = Duration(minutes: 2);
 
   static Future<LocationResult> currentFix() async {
     try {
@@ -102,23 +127,71 @@ class LocationService {
         return const LocationResult.failure(LocationFailure.denied);
       }
 
-      final position = await Geolocator.getCurrentPosition(
-        locationSettings: const LocationSettings(
-          accuracy: LocationAccuracy.high,
-          timeLimit: fixTimeout,
-        ),
-      );
-      return evaluate(
-        latitude: position.latitude,
-        longitude: position.longitude,
-        accuracyMeters: position.accuracy,
-        isMocked: position.isMocked,
-      );
-    } on TimeoutException {
-      return const LocationResult.failure(LocationFailure.timeout);
+      if (await _isApproximateOnly()) {
+        return const LocationResult.failure(LocationFailure.approximateOnly);
+      }
+
+      final collector = FixCollector();
+      await _collect(collector);
+
+      // Nothing arrived from the live stream: a very recent cached position
+      // beats failing (the same accuracy and spoofing checks still apply).
+      if (collector.isEmpty) {
+        final last = await Geolocator.getLastKnownPosition();
+        if (last != null && DateTime.now().difference(last.timestamp) <= lastKnownMaxAge) {
+          collector.add(_sampleOf(last));
+        }
+      }
+      return collector.result();
     } catch (_) {
       return const LocationResult.failure(LocationFailure.unknown);
     }
+  }
+
+  static LocationSample _sampleOf(Position p) => LocationSample(
+        latitude: p.latitude,
+        longitude: p.longitude,
+        accuracyMeters: p.accuracy,
+        isMocked: p.isMocked,
+      );
+
+  /// Whether the OS only granted approximate location. Platforms that can't
+  /// report it (older Android) are treated as precise.
+  static Future<bool> _isApproximateOnly() async {
+    try {
+      return await Geolocator.getLocationAccuracy() == LocationAccuracyStatus.reduced;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  /// Listens for positions until one is good enough or [fixTimeout] passes.
+  static Future<void> _collect(FixCollector collector) {
+    final done = Completer<void>();
+    StreamSubscription<Position>? sub;
+    Timer? timer;
+
+    void finish() {
+      timer?.cancel();
+      sub?.cancel();
+      if (!done.isCompleted) done.complete();
+    }
+
+    timer = Timer(fixTimeout, finish);
+    sub = Geolocator.getPositionStream(
+      locationSettings: const LocationSettings(
+        accuracy: LocationAccuracy.best,
+        distanceFilter: 0,
+      ),
+    ).listen(
+      (position) {
+        collector.add(_sampleOf(position));
+        if (collector.hasGoodFix) finish();
+      },
+      onError: (Object _) => finish(),
+      onDone: finish,
+    );
+    return done.future;
   }
 
   /// Pure validation of a raw position — separated from the platform calls so
@@ -135,6 +208,52 @@ class LocationService {
     }
     return LocationResult.success(
       LocationFix(latitude: latitude, longitude: longitude, accuracyMeters: accuracyMeters),
+    );
+  }
+}
+
+/// One raw position reading, decoupled from the platform type so the
+/// selection logic can be unit-tested.
+class LocationSample {
+  final double latitude;
+  final double longitude;
+  final double accuracyMeters;
+  final bool isMocked;
+
+  const LocationSample({
+    required this.latitude,
+    required this.longitude,
+    required this.accuracyMeters,
+    this.isMocked = false,
+  });
+}
+
+/// Accumulates readings during the fix window and picks the outcome: the most
+/// accurate reading, unless any reading looks spoofed.
+class FixCollector {
+  final List<LocationSample> _samples = [];
+
+  bool get isEmpty => _samples.isEmpty;
+
+  void add(LocationSample sample) => _samples.add(sample);
+
+  /// A genuine reading accurate enough to stop waiting.
+  bool get hasGoodFix => _samples.any(
+      (s) => !s.isMocked && s.accuracyMeters <= LocationService.goodAccuracyMeters);
+
+  LocationResult result() {
+    if (_samples.isEmpty) {
+      return const LocationResult.failure(LocationFailure.timeout);
+    }
+    if (_samples.any((s) => s.isMocked)) {
+      return const LocationResult.failure(LocationFailure.mocked);
+    }
+    final best = _samples.reduce((a, b) => b.accuracyMeters < a.accuracyMeters ? b : a);
+    return LocationService.evaluate(
+      latitude: best.latitude,
+      longitude: best.longitude,
+      accuracyMeters: best.accuracyMeters,
+      isMocked: best.isMocked,
     );
   }
 }

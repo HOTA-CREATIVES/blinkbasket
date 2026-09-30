@@ -1,12 +1,11 @@
-import 'dart:convert';
 import 'package:flutter/material.dart';
-import 'package:http/http.dart' as http;
 import 'package:provider/provider.dart';
 import '../../../core/data/villages.dart';
 import '../../../core/models/user_model.dart';
 import '../../../core/design/widgets/leaflet_location_picker.dart';
 import '../../../core/providers/auth_provider.dart';
 import '../../../core/providers/config_provider.dart';
+import '../../../core/services/geocoding_service.dart';
 import '../../../core/services/location_service.dart';
 import '../../../core/utils/customer_helper.dart';
 import '../../../core/utils/phone.dart';
@@ -81,45 +80,21 @@ class _CustomerProfileSetupScreenState extends State<CustomerProfileSetupScreen>
     );
   }
 
-  Future<void> _reverseGeocode(double lat, double lng) async {
-    try {
-      final url = Uri.parse(
-        'https://nominatim.openstreetmap.org/reverse?format=json&lat=$lat&lon=$lng&zoom=18&addressdetails=1',
-      );
-      final response = await http.get(url, headers: {'User-Agent': 'JCMartFlutterApp/1.0'});
-      if (response.statusCode == 200) {
-        final data = jsonDecode(response.body) as Map<String, dynamic>;
-        final address = data['address'] as Map<String, dynamic>?;
-        if (address != null) {
-          // The village is NOT taken from Nominatim's free text any more —
-          // it's derived from the admin service zones (see _acceptLocation),
-          // so it always matches a real zone name.
-          final road = (address['road'] ?? address['suburb'] ?? address['neighbourhood'] ?? '').toString();
-          final mandalName = (address['county'] ?? address['suburb'] ?? address['neighbourhood'] ?? '').toString();
-          final districtName = (address['state_district'] ?? address['county'] ?? address['state'] ?? '').toString();
-          final postcode = address['postcode'] as String?;
+  final GeocodingService _geocoder = GeocodingService();
 
-          if (mounted) {
-            setState(() {
-              if (road.isNotEmpty && _streetController.text.trim().isEmpty) {
-                _streetController.text = road;
-              }
-              if (mandalName.isNotEmpty) {
-                _detectedMandal = mandalName;
-              }
-              if (districtName.isNotEmpty) {
-                _detectedDistrict = districtName;
-              }
-              if (postcode != null && postcode.isNotEmpty) {
-                _pincodeController.text = postcode;
-              }
-            });
-          }
-        }
+  Future<void> _reverseGeocode(double lat, double lng) async {
+    // Best effort: the village comes from the service zones (see
+    // _acceptLocation); this only pre-fills the address form.
+    final suggestion = await _geocoder.reverse(lat, lng);
+    if (suggestion == null || !mounted) return;
+    setState(() {
+      if (suggestion.road.isNotEmpty && _streetController.text.trim().isEmpty) {
+        _streetController.text = suggestion.road;
       }
-    } catch (e) {
-      debugPrint('Reverse geocode error: $e');
-    }
+      if (suggestion.mandal.isNotEmpty) _detectedMandal = suggestion.mandal;
+      if (suggestion.district.isNotEmpty) _detectedDistrict = suggestion.district;
+      if (suggestion.pincode.isNotEmpty) _pincodeController.text = suggestion.pincode;
+    });
   }
 
   /// Checks a captured/pinned point against the admin service zones. Inside →
@@ -153,6 +128,7 @@ class _CustomerProfileSetupScreenState extends State<CustomerProfileSetupScreen>
       initialLat: center.lat,
       initialLng: center.lng,
       initialIsPinned: _latitude != null,
+      zones: zones,
       onConfirmed: (lat, lng) => _acceptLocation(lat, lng),
     );
   }
@@ -173,7 +149,9 @@ class _CustomerProfileSetupScreenState extends State<CustomerProfileSetupScreen>
           behavior: SnackBarBehavior.floating,
           action: result.canOpenSettings
               ? SnackBarAction(label: 'Settings', onPressed: result.openSettings)
-              : null,
+              : result.canRetry
+                  ? SnackBarAction(label: 'Try again', onPressed: _getCurrentLocation)
+                  : null,
         ),
       );
       return;

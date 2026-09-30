@@ -18,6 +18,20 @@ Every env var, dart-define, secret, and config source — and how they layer.
 | `BackendConfig.useNodeBackend` | [backend_config.dart](../../lib/core/services/backend_config.dart) | `false` (Node-backend branch is dead code) |
 | `CLOUDINARY_CLOUD_NAME` / `CLOUDINARY_UPLOAD_FOLDER` | [index.ts:12-13](../../functions/src/index.ts#L12-L13) | `diiyy6bar` / `products` |
 
+### Cloud Functions environment (geocoding proxy)
+| Variable | Default | Effect |
+|---|---|---|
+| `GEOCODER_BASE_URL` | `https://nominatim.openstreetmap.org` | Nominatim-compatible API used by `reverseGeocode` / `searchAddress`. Point it at a paid provider for production scale — the public instance's usage policy does not allow heavy commercial use. |
+| `GEOCODER_CONTACT_EMAIL` | `support@jcmart.app` | Sent in the `User-Agent` so the geocoder can contact the operator. Set a real, monitored address. |
+
+Results are cached in `/geocodeCache` (30 days); set a Firestore TTL policy if you want old entries reaped. Rate-limit counters live in `/rateLimits` — set a TTL policy on `expireAt`.
+
+### Admin config flags (`/config/app`)
+| Field | Default | Effect |
+|---|---|---|
+| `requireVerifiedEmail` | `true` | `placeOrder` refuses email/password accounts whose email is unverified. Set `false` only while email delivery is broken. |
+| `serviceZones` | built-in villages, 12 km | Delivery zones (`name`, `lat`, `lng`, `radiusKm`) used by the app and by `placeOrder` / `searchAddress`. |
+
 ### Secrets
 | Secret | Storage | Access |
 |---|---|---|

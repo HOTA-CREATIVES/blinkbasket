@@ -1592,6 +1592,163 @@ export const createRiderLogin = onCall({ region: REGION, enforceAppCheck: proces
   return { success: true, uid: riderUid, temporaryPassword: password };
 });
 
+// ── Geocoding proxy ─────────────────────────────────────────────────
+// The app used to call the public Nominatim endpoint straight from every
+// device (no caching, an inconsistent User-Agent, no throttle), which that
+// service's usage policy doesn't allow at scale. The app now calls these
+// callables instead: they identify the app, cache results in Firestore, are
+// App Check + rate limited per user, and are the single place to swap in a
+// paid geocoder — set GEOCODER_BASE_URL (Nominatim-compatible API) and
+// GEOCODER_CONTACT_EMAIL in the function's environment.
+const GEOCODER_BASE_URL = (process.env.GEOCODER_BASE_URL ?? "https://nominatim.openstreetmap.org").replace(/\/+$/, "");
+const GEOCODER_CONTACT = process.env.GEOCODER_CONTACT_EMAIL ?? "support@jcmart.app";
+const GEOCODER_TIMEOUT_MS = 8_000;
+const GEOCODE_CACHE_DAYS = 30;
+const SEARCH_RESULT_LIMIT = 6;
+
+async function geocoderGet(path: string, params: Record<string, string>): Promise<any> {
+  const url = `${GEOCODER_BASE_URL}${path}?${new URLSearchParams({ format: "jsonv2", ...params }).toString()}`;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), GEOCODER_TIMEOUT_MS);
+  try {
+    const res = await fetch(url, {
+      headers: { "User-Agent": `JCMart/1.0 (${GEOCODER_CONTACT})`, "Accept-Language": "en" },
+      signal: controller.signal,
+    });
+    if (!res.ok) throw new Error(`geocoder responded ${res.status}`);
+    return await res.json();
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function readGeocodeCache(key: string): Promise<any | null> {
+  const snap = await db.collection("geocodeCache").doc(key).get();
+  const data = snap.data();
+  if (!data || !(data.fetchedAt instanceof Timestamp)) return null;
+  const ageMs = Date.now() - data.fetchedAt.toMillis();
+  return ageMs < GEOCODE_CACHE_DAYS * 24 * 3600 * 1000 ? data.value : null;
+}
+
+function writeGeocodeCache(key: string, value: unknown): Promise<unknown> {
+  return db
+    .collection("geocodeCache")
+    .doc(key)
+    .set({ value, fetchedAt: Timestamp.now() })
+    .catch((e) => console.error("[GEOCODE_CACHE_WRITE_FAILED]", e));
+}
+
+/** Address details for a pinned point, to pre-fill the address form. Best
+ * effort: the client treats any failure as "fill it in yourself". */
+export const reverseGeocode = onCall({ region: REGION, enforceAppCheck: process.env.FUNCTIONS_EMULATOR !== "true" }, async (request) => {
+  const uid = request.auth?.uid;
+  if (!uid) {
+    throw new HttpsError("unauthenticated", "Sign in first.");
+  }
+  await checkRateLimit(uid, "geocode");
+
+  const lat = typeof request.data?.lat === "number" ? request.data.lat : NaN;
+  const lng = typeof request.data?.lng === "number" ? request.data.lng : NaN;
+  if (!isValidCoordinate(lat, lng)) {
+    throw new HttpsError("invalid-argument", "A valid location is required.");
+  }
+
+  // ~11 m grid: neighbouring pins share an entry, which is what makes the
+  // cache effective in a small service area.
+  const cacheKey = `rev_${lat.toFixed(4)}_${lng.toFixed(4)}`;
+  const cached = await readGeocodeCache(cacheKey);
+  if (cached) return cached;
+
+  let body: any;
+  try {
+    body = await geocoderGet("/reverse", {
+      lat: String(lat),
+      lon: String(lng),
+      zoom: "18",
+      addressdetails: "1",
+    });
+  } catch (e) {
+    console.error("[GEOCODE_REVERSE_FAILED]", e);
+    throw new HttpsError("unavailable", "Address lookup is unavailable right now.");
+  }
+
+  const address = body?.address ?? {};
+  const result = {
+    road: String(address.road ?? address.suburb ?? address.neighbourhood ?? ""),
+    mandal: String(address.county ?? address.suburb ?? address.neighbourhood ?? ""),
+    district: String(address.state_district ?? address.county ?? address.state ?? ""),
+    pincode: String(address.postcode ?? ""),
+    label: String(body?.display_name ?? ""),
+  };
+  await writeGeocodeCache(cacheKey, result);
+  return result;
+});
+
+/** Address / landmark search inside the delivery area, so a customer who can't
+ * (or won't) use GPS can still find their house. */
+export const searchAddress = onCall({ region: REGION, enforceAppCheck: process.env.FUNCTIONS_EMULATOR !== "true" }, async (request) => {
+  const uid = request.auth?.uid;
+  if (!uid) {
+    throw new HttpsError("unauthenticated", "Sign in first.");
+  }
+  await checkRateLimit(uid, "geocode");
+
+  const query = String(request.data?.query ?? "").trim().replace(/\s+/g, " ");
+  if (query.length < 3 || query.length > 100) {
+    throw new HttpsError("invalid-argument", "Enter at least 3 characters to search.");
+  }
+
+  const configSnap = await db.collection("config").doc("app").get();
+  const zones = deliveryZonesFromConfig(configSnap.exists ? (configSnap.data() as FirebaseFirestore.DocumentData) : {});
+
+  // Bound the search to the delivery area (each zone's circle, as a box) so
+  // suggestions are places we can actually reach.
+  const degPerMeterLat = 1 / 111_320;
+  let west = Infinity, east = -Infinity, south = Infinity, north = -Infinity;
+  for (const z of zones) {
+    const dLat = z.radiusMeters * degPerMeterLat;
+    const dLng = z.radiusMeters * degPerMeterLat / Math.max(Math.cos((z.latitude * Math.PI) / 180), 0.01);
+    west = Math.min(west, z.longitude - dLng);
+    east = Math.max(east, z.longitude + dLng);
+    south = Math.min(south, z.latitude - dLat);
+    north = Math.max(north, z.latitude + dLat);
+  }
+
+  const cacheKey = `q_${createHash("sha1").update(`${query.toLowerCase()}|${west}|${south}|${east}|${north}`).digest("hex")}`;
+  let places = await readGeocodeCache(cacheKey);
+  if (!places) {
+    let body: any;
+    try {
+      body = await geocoderGet("/search", {
+        q: query,
+        limit: String(SEARCH_RESULT_LIMIT),
+        countrycodes: "in",
+        viewbox: `${west},${north},${east},${south}`,
+        bounded: "1",
+      });
+    } catch (e) {
+      console.error("[GEOCODE_SEARCH_FAILED]", e);
+      throw new HttpsError("unavailable", "Address search is unavailable right now.");
+    }
+    places = (Array.isArray(body) ? body : [])
+      .map((r: any) => ({
+        label: String(r?.display_name ?? "").trim(),
+        lat: Number(r?.lat),
+        lng: Number(r?.lon),
+      }))
+      .filter((p: any) => p.label && isValidCoordinate(p.lat, p.lng))
+      .slice(0, SEARCH_RESULT_LIMIT);
+    await writeGeocodeCache(cacheKey, places);
+  }
+
+  return {
+    places: places.map((p: any) => {
+      const resolved = resolveDeliveryZone(p.lat, p.lng, zones);
+      return { ...p, zone: resolved.zone?.name ?? null };
+    }),
+  };
+});
+
 /**
  * Computes a signed Cloudinary upload signature server-side so the API
  * secret never ships inside the client binary. Admin-only — the only

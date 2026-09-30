@@ -94,6 +94,20 @@ class CustomerHelper {
     return (name: b.name, distanceMeters: b.distance, isInside: b.inside);
   }
 
+  /// The zones in force: the admin-configured [zones], or — before they load or
+  /// when none are set — the built-in villages with the fallback radius.
+  static List<ServiceZone> effectiveZones(List<ServiceZone> zones) => zones.isNotEmpty
+      ? zones
+      : [
+          for (final v in Villages.all)
+            ServiceZone(
+              name: v.name,
+              lat: v.latitude,
+              lng: v.longitude,
+              radiusKm: fallbackServiceRadiusMeters / 1000,
+            )
+        ];
+
   /// Map-centring point for a village/zone [name] (live zones first, then the
   /// static list, then the first configured zone/village).
   static ({double lat, double lng}) centerOf(String? name, List<ServiceZone> zones) {
