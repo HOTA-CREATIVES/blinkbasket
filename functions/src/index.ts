@@ -1,7 +1,6 @@
 import { onCall, HttpsError } from "firebase-functions/v2/https";
 import { onDocumentWritten } from "firebase-functions/v2/firestore";
 import { onSchedule } from "firebase-functions/v2/scheduler";
-import { defineSecret } from "firebase-functions/params";
 import { initializeApp } from "firebase-admin/app";
 import { getFirestore, FieldValue, Timestamp } from "firebase-admin/firestore";
 import { getAuth } from "firebase-admin/auth";
@@ -11,11 +10,10 @@ import { createHash, randomBytes, randomInt } from "crypto";
 initializeApp();
 const db = getFirestore();
 
-// Cloudinary secret lives in Secret Manager, never in source or the client
-// binary. Set with: firebase functions:secrets:set CLOUDINARY_API_SECRET
-const cloudinaryApiSecret = defineSecret("CLOUDINARY_API_SECRET");
-const cloudinaryApiKey = defineSecret("CLOUDINARY_API_KEY");
-const CLOUDINARY_CLOUD_NAME = "diiyy6bar";
+// Cloudinary credentials loaded from environment variables (e.g. functions/.env)
+const CLOUDINARY_API_KEY = process.env.CLOUDINARY_API_KEY || "";
+const CLOUDINARY_API_SECRET = process.env.CLOUDINARY_API_SECRET || "";
+const CLOUDINARY_CLOUD_NAME = process.env.CLOUDINARY_CLOUD_NAME || "diiyy6bar";
 const CLOUDINARY_UPLOAD_FOLDER = "products";
 
 // Mumbai region — closest to the Bhimavaram service area.
@@ -1273,28 +1271,32 @@ export const createRiderLogin = onCall({ region: REGION, enforceAppCheck: proces
  * current image uploads (product photos, banners) are admin actions.
  */
 export const getCloudinarySignature = onCall(
-  { region: REGION, secrets: [cloudinaryApiSecret, cloudinaryApiKey], enforceAppCheck: process.env.FUNCTIONS_EMULATOR !== "true" },
+  { region: REGION, enforceAppCheck: process.env.FUNCTIONS_EMULATOR !== "true" },
   async (request) => {
-  const uid = request.auth?.uid;
-  if (!uid) {
-    throw new HttpsError("unauthenticated", "Sign in first.");
-  }
-  checkRateLimit(uid, "getCloudinarySignature");
+    const uid = request.auth?.uid;
+    if (!uid) {
+      throw new HttpsError("unauthenticated", "Sign in first.");
+    }
+    checkRateLimit(uid, "getCloudinarySignature");
 
-  const adminSnap = await db.collection("admins").doc(uid).get();
+    const adminSnap = await db.collection("admins").doc(uid).get();
     if (!adminSnap.exists || adminSnap.data()?.isActive === false) {
       throw new HttpsError("permission-denied", "Only active admins can upload images.");
     }
 
+    if (!CLOUDINARY_API_SECRET || !CLOUDINARY_API_KEY) {
+      throw new HttpsError("failed-precondition", "Cloudinary credentials are not configured on the server.");
+    }
+
     const timestamp = Math.floor(Date.now() / 1000);
     const folder = CLOUDINARY_UPLOAD_FOLDER;
-    const stringToSign = `folder=${folder}&timestamp=${timestamp}${cloudinaryApiSecret.value()}`;
+    const stringToSign = `folder=${folder}&timestamp=${timestamp}${CLOUDINARY_API_SECRET}`;
     const signature = createHash("sha1").update(stringToSign).digest("hex");
 
     return {
       timestamp,
       signature,
-      apiKey: cloudinaryApiKey.value(),
+      apiKey: CLOUDINARY_API_KEY,
       cloudName: CLOUDINARY_CLOUD_NAME,
       folder,
     };
